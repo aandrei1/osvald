@@ -1,0 +1,2 @@
+Uploaded scripts are stored here (see `UPLOAD_DIR` in `.env.example`).
+Object storage (S3/R2) is a TODO; this directory is a local stand-in.

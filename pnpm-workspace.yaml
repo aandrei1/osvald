@@ -1,0 +1,38 @@
+# pnpm workspace definition.
+#
+# NOTE (pnpm >= 10): all pnpm *settings* live in this file, not in .npmrc.
+# Only auth/registry settings are still read from .npmrc.
+
+packages:
+  - 'packages/*'
+  # The OCR service is Python backed and intentionally NOT part of the JS
+  # workspace. It is started via Docker Compose (see docker-compose.yml).
+  - '!packages/ocr-service'
+
+# Which dependencies may run install/postinstall scripts (pnpm blocks them by
+# default). Add an entry when a package genuinely has to build itself.
+#   esbuild          -> links the platform binary (Vite / tsx / drizzle-kit)
+#   msgpackr-extract -> denied on purpose: BullMQ's msgpackr falls back to pure JS
+allowBuilds:
+  esbuild: true
+  msgpackr-extract: false
+
+# Supply-chain policy: pnpm 12 refuses to install versions published less than
+# `minimumReleaseAge` (24h) ago. pnpm wrote these exemptions for the exact
+# versions pinned on 2026-09-21 — they can be pruned once those releases age out.
+minimumReleaseAgeExclude:
+  - '@fastify/swagger@9.8.2'
+  - '@typescript-eslint/eslint-plugin@8.70.1'
+  - '@typescript-eslint/parser@8.70.1'
+  - '@typescript-eslint/project-service@8.70.1'
+  - '@typescript-eslint/scope-manager@8.70.1'
+  - '@typescript-eslint/tsconfig-utils@8.70.1'
+  - '@typescript-eslint/type-utils@8.70.1'
+  - '@typescript-eslint/types@8.70.1'
+  - '@typescript-eslint/typescript-estree@8.70.1'
+  - '@typescript-eslint/utils@8.70.1'
+  - '@typescript-eslint/visitor-keys@8.70.1'
+  - dotenv@18.0.2
+  - drizzle-kit@0.31.11
+  - drizzle-orm@0.45.3
+  - typescript-eslint@8.70.1

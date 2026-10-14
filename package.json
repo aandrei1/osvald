@@ -1,0 +1,45 @@
+{
+  "name": "osvald",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Cross-platform rehearsal app for actors (monorepo root)",
+  "license": "UNLICENSED",
+  "packageManager": "pnpm@12.5.1",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "dev:backend": "turbo run dev --filter @osvald/backend",
+    "dev:frontend": "turbo run dev --filter @osvald/frontend",
+    "lint": "turbo run lint",
+    "lint:fix": "turbo run lint:fix",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "clean": "turbo run clean && rm -rf node_modules",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "db:generate": "pnpm --filter @osvald/backend db:generate",
+    "db:migrate": "pnpm --filter @osvald/backend db:migrate",
+    "db:studio": "pnpm --filter @osvald/backend db:studio",
+    "db:seed": "pnpm --filter @osvald/backend db:seed",
+    "dev:worker": "pnpm --filter @osvald/backend dev:worker",
+    "docker:up": "docker compose up -d --build",
+    "docker:down": "docker compose down",
+    "docker:logs": "docker compose logs -f",
+    "ocr:dev": "docker compose up -d --build ocr-service"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.6",
+    "eslint": "10.11.0",
+    "eslint-config-prettier": "10.1.8",
+    "eslint-plugin-vue": "10.11.0",
+    "globals": "17.12.0",
+    "prettier": "3.9.8",
+    "turbo": "2.11.2",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.70.1",
+    "vue-eslint-parser": "10.4.1"
+  }
+}

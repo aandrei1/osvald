@@ -1,0 +1,10 @@
+# Osvald OCR service — pinned for reproducible images (Python >= 3.10).
+fastapi==0.141.1
+uvicorn[standard]==0.53.0
+# Required by FastAPI to parse multipart/form-data (`UploadFile`).
+python-multipart==0.0.32
+
+# PDF reading: text layer extraction and page rendering. Small, no models.
+pypdfium2==5.14.0
+numpy==2.3.4
+pillow==12.1.0

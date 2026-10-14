@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "display": "Osvald base config",
+  "compilerOptions": {
+    /* Strictness: every package extends this and stays strict. */
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "forceConsistentCasingInFileNames": true,
+    "allowUnreachableCode": false,
+
+    /* Module handling: overridden per package (nodenext for Node, bundler for Vite). */
+    "target": "ES2023",
+    "moduleDetection": "force",
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "erasableSyntaxOnly": true,
+
+    /* Tooling quality-of-life. */
+    "skipLibCheck": true
+  }
+}

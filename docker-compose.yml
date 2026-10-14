@@ -1,0 +1,156 @@
+# Local development stack: Postgres, Redis, the Fastify API and the Python OCR service.
+#
+#   pnpm docker:up      # start everything
+#   pnpm docker:logs    # follow logs
+#   pnpm docker:down    # stop (add -v to wipe the database volume)
+#
+# The `worker` service is opt-in (BullMQ script-parsing consumer):
+#   docker compose --profile worker up -d
+#
+# Images:
+#   - backend/worker  -> packages/backend/Dockerfile (Node 24 + pnpm workspace)
+#   - ocr-service     -> packages/ocr-service/Dockerfile (Python 3.12 + FastAPI)
+#   - postgres/redis  -> upstream images, nothing to build
+#   - frontend        -> no image: Vite runs on the host, iOS/Android via Capacitor
+#
+# Host ports were picked to avoid clashing with already-running local services
+# (5432 and 8000 were taken on this dev machine, hence 5433 and 8001).
+# Override any of them in `.env`.
+
+name: osvald
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-osvald}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-osvald}
+      POSTGRES_DB: ${POSTGRES_DB:-osvald}
+    ports:
+      - '${POSTGRES_PORT:-5433}:5432'
+    volumes:
+      # PostgreSQL 18+ keeps its cluster in /var/lib/postgresql/<major>/docker,
+      # so the mount point is /var/lib/postgresql (not .../data).
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-osvald} -d ${POSTGRES_DB:-osvald}']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:8-alpine
+    restart: unless-stopped
+    command: ['redis-server', '--appendonly', 'yes']
+    ports:
+      - '${REDIS_PORT:-6379}:6379'
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: .
+      dockerfile: packages/backend/Dockerfile
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 3000
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      DATABASE_URL: postgres://${POSTGRES_USER:-osvald}:${POSTGRES_PASSWORD:-osvald}@postgres:5432/${POSTGRES_DB:-osvald}
+      REDIS_URL: redis://redis:6379
+      OCR_SERVICE_URL: http://ocr-service:8000
+      OCR_LANGUAGE: ${OCR_LANGUAGE:-ro}
+      OCR_PDF_TIMEOUT_MS: ${OCR_PDF_TIMEOUT_MS:-900000}
+      JWT_SECRET: ${JWT_SECRET:-dev-only-secret-change-me-min-32-characters-long}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-1h}
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:5173,http://localhost:4173,http://localhost,capacitor://localhost}
+      UPLOAD_DIR: /repo/packages/backend/uploads
+    ports:
+      - '${BACKEND_PORT:-3000}:3000'
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      # `localhost` resolves to IPv6 ::1 inside the Alpine image while Node
+      # listens on IPv4, so probe 127.0.0.1 explicitly. Node is always present.
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3000/health').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # Optional: the BullMQ consumer for the `script-parsing` queue.
+  # Same image as `backend`, different entrypoint.
+  # Enable with `docker compose --profile worker up -d`.
+  worker:
+    build:
+      context: .
+      dockerfile: packages/backend/Dockerfile
+    profiles: ['worker']
+    restart: unless-stopped
+    command: ['node', 'packages/backend/dist/queue/worker.js']
+    environment:
+      NODE_ENV: production
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      DATABASE_URL: postgres://${POSTGRES_USER:-osvald}:${POSTGRES_PASSWORD:-osvald}@postgres:5432/${POSTGRES_DB:-osvald}
+      REDIS_URL: redis://redis:6379
+      OCR_SERVICE_URL: http://ocr-service:8000
+      OCR_LANGUAGE: ${OCR_LANGUAGE:-ro}
+      OCR_PDF_TIMEOUT_MS: ${OCR_PDF_TIMEOUT_MS:-900000}
+      JWT_SECRET: ${JWT_SECRET:-dev-only-secret-change-me-min-32-characters-long}
+      UPLOAD_DIR: /repo/packages/backend/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  ocr-service:
+    build:
+      context: ./packages/ocr-service
+      args:
+        # PDFs with a text layer need nothing extra. Set to `true` to install
+        # PaddleOCR (over a gigabyte) so scanned documents work too:
+        #   docker compose build --build-arg WITH_PADDLE=true ocr-service
+        WITH_PADDLE: ${WITH_PADDLE:-false}
+        OCR_LANGUAGE: ${OCR_LANGUAGE:-ro}
+    restart: unless-stopped
+    environment:
+      OCR_LANGUAGE: ${OCR_LANGUAGE:-ro}
+      OCR_LOG_LEVEL: ${LOG_LEVEL:-info}
+      # Most pages one request may OCR; 0 lifts the cap.
+      OCR_MAX_OCR_PAGES: ${OCR_MAX_OCR_PAGES:-80}
+      OCR_MAX_UPLOAD_BYTES: ${OCR_MAX_UPLOAD_BYTES:-67108864}
+    ports:
+      - '${OCR_SERVICE_PORT:-8001}:8000'
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'python',
+          '-c',
+          "import urllib.request;urllib.request.urlopen('http://localhost:8000/health')",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  postgres-data:
+  redis-data:

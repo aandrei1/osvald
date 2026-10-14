@@ -1,0 +1,44 @@
+{
+  "name": "@osvald/frontend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Vue 3 + Ionic + Capacitor rehearsal app",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc --noEmit -p tsconfig.json && vite build",
+    "preview": "vite preview",
+    "typecheck": "vue-tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "clean": "rm -rf dist .turbo",
+    "cap:sync": "cap sync",
+    "cap:add:ios": "cap add ios",
+    "cap:add:android": "cap add android",
+    "cap:open:ios": "cap open ios",
+    "cap:open:android": "cap open android",
+    "cap:doctor": "cap doctor"
+  },
+  "dependencies": {
+    "@capacitor/android": "8.5.2",
+    "@capacitor/core": "8.5.2",
+    "@capacitor/ios": "8.5.2",
+    "@ionic/vue": "9.0.4",
+    "@ionic/vue-router": "9.0.4",
+    "@osvald/shared": "workspace:*",
+    "@vue/devtools-api": "8.2.1",
+    "ionicons": "8.1.0",
+    "pinia": "4.0.3",
+    "vue": "3.5.43",
+    "vue-router": "5.3.1"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "8.5.2",
+    "@types/node": "24.13.6",
+    "@vitejs/plugin-vue": "6.0.9",
+    "eslint": "10.11.0",
+    "typescript": "6.0.3",
+    "vite": "8.3.0",
+    "vue-tsc": "3.3.11"
+  }
+}

@@ -1,0 +1,11 @@
+dist
+build
+coverage
+node_modules
+.turbo
+pnpm-lock.yaml
+__pycache__
+.venv
+packages/frontend/ios
+packages/frontend/android
+packages/backend/drizzle/meta

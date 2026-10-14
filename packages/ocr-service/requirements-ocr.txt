@@ -1,0 +1,9 @@
+# Optional OCR stack, needed only for PDFs without a text layer (scans).
+#
+# Installed when the image is built with `--build-arg WITH_PADDLE=true`. It is
+# opt-in because PaddlePaddle + PaddleX add well over a gigabyte to the image
+# and the recognition models are downloaded on first use.
+#
+#   docker compose build --build-arg WITH_PADDLE=true ocr-service
+paddleocr==3.7.0
+paddlepaddle==3.3.1

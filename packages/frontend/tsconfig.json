@@ -1,0 +1,18 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "types": ["vite/client"],
+    "jsx": "preserve",
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    // No `baseUrl`: deprecated in TS 6. `paths` resolves relative to this file.
+    "paths": {
+      "@/*": ["./src/*"]
+    }
+  },
+  "include": ["env.d.ts", "src/**/*.ts", "src/**/*.vue"],
+  "exclude": ["dist", "node_modules", "android", "ios"]
+}

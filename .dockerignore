@@ -1,0 +1,22 @@
+# Docker build context = repository root (the backend needs the pnpm workspace:
+# pnpm-lock.yaml + packages/shared). One image serves both the `backend` and
+# `worker` compose services; they differ only by the start command.
+#
+# NOTE: packages/frontend is NOT excluded — the Dockerfile copies its
+# package.json so the workspace/lockfile importers line up. Only its build output
+# and dependencies are excluded (see the patterns below).
+node_modules
+**/node_modules
+**/dist
+**/.turbo
+.git
+.env
+.env.*
+!**/.env.example
+**/*.log
+**/.DS_Store
+**/uploads/*
+# The OCR service has its own build context (packages/ocr-service/Dockerfile).
+packages/ocr-service
+packages/frontend/android
+packages/frontend/ios

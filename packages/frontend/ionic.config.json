@@ -1,0 +1,7 @@
+{
+  "name": "osvald-frontend",
+  "type": "vue",
+  "integrations": {
+    "capacitor": {}
+  }
+}
