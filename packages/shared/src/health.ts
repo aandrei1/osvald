@@ -12,7 +12,7 @@ export const dependencyStatusSchema = z.enum(['up', 'down', 'unknown']);
 export type DependencyStatus = z.infer<typeof dependencyStatusSchema>;
 
 export const healthDependencySchema = z.object({
-  name: z.enum(['database', 'redis', 'ocrService']),
+  name: z.enum(['database', 'redis', 'ocrService', 'ttsService']),
   status: dependencyStatusSchema,
   latencyMs: z.number().nonnegative().nullable(),
   message: z.string().nullable(),
