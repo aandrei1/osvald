@@ -17,6 +17,10 @@
     "lint:fix": "turbo run lint:fix",
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
+    "coverage": "turbo run coverage",
+    "test:python": "pnpm test:python:ocr && pnpm test:python:tts",
+    "test:python:ocr": "docker compose run --rm --no-deps -v \"$PWD:/repo\" -w /repo/packages/ocr-service ocr-service sh -c 'pip install --user -q -r requirements-dev.txt && python -m pytest'",
+    "test:python:tts": "docker compose run --rm --no-deps -v \"$PWD:/repo\" -w /repo/packages/tts-service tts-service sh -c 'pip install --user -q -r requirements-dev.txt && python -m pytest'",
     "clean": "turbo run clean && rm -rf node_modules",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
@@ -32,6 +36,7 @@
   },
   "devDependencies": {
     "@types/node": "24.13.6",
+    "@vitest/coverage-v8": "5.0.5",
     "eslint": "10.11.0",
     "eslint-config-prettier": "10.1.8",
     "eslint-plugin-vue": "10.11.0",
@@ -40,6 +45,7 @@
     "turbo": "2.11.2",
     "typescript": "6.0.3",
     "typescript-eslint": "8.70.1",
+    "vitest": "5.0.5",
     "vue-eslint-parser": "10.4.1"
   }
 }

@@ -4,6 +4,7 @@ dist
 build
 .turbo
 *.tsbuildinfo
+coverage/
 
 # Env files (see .env.example)
 .env
