@@ -1,0 +1,7 @@
+# Test-only dependencies for `packages/ocr-service`.
+# Install inside the service image (all runtime deps are already there):
+#   pip install -r requirements-dev.txt
+#   python -m pytest
+pytest==8.4.2
+# `fastapi.testclient.TestClient` is an httpx client.
+httpx==0.28.1
