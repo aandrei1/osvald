@@ -151,4 +151,18 @@ root README.
 - Object storage for uploads (currently the local `uploads/` dir), antivirus
   scanning, `%PDF-` magic-byte checks.
 - `@fastify/swagger-ui` (only the JSON spec is exposed today).
-- Tests.
+
+## Testing
+
+```bash
+pnpm --filter @osvald/backend test          # unit + integration
+pnpm --filter @osvald/backend test:watch
+```
+
+Unit tests cover `src/parsing/` (the parser and the page cleanup), the row
+mappers and the async helpers. Integration tests build the app with
+`buildApp()` and drive it through `app.inject()`: the real plugins, Zod
+compilers, auth guard and error handler run against a disposable Postgres
+database (`osvald_test` by default, override with `TEST_DATABASE_URL`), while
+Redis and BullMQ are faked. Without a reachable Postgres the integration suites
+skip; the unit suite always runs.

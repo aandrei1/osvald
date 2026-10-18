@@ -144,4 +144,18 @@ document never blocks the event loop.
 - A `?deep=true` health variant that runs a smoke inference, so a broken model
   download is caught before the first real job.
 - Per-request language packs: the service loads one at a time.
-- Tests.
+
+## Testing
+
+```bash
+pnpm test:python:ocr        # from the repo root
+```
+
+`tests/` covers `parse_page_range`, text-layer extraction on
+`samples/avarul-excerpt.pdf`, the reading-order sort and the HTTP contract. It
+runs inside the built image, where `pypdfium2` is already installed:
+
+```bash
+docker compose run --rm --no-deps -v "$PWD:/repo" -w /repo/packages/ocr-service \
+  ocr-service sh -c 'pip install --user -q -r requirements-dev.txt && python -m pytest'
+```

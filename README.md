@@ -223,8 +223,9 @@ extraction step is skipped. It is idempotent on the account, and
   more rules. It never silently drops text — anything it cannot attribute is
   kept as an unattributed line.
 - **Native speech is a stub**, so the Capacitor builds run silently.
-- **No tests.** Picking a runner (Vitest + pytest) is still an open dependency
-  decision; the parser is the obvious first thing to cover.
+- **The Python suites need the service images.** `pnpm test` covers the JS
+  packages; `pnpm test:python` runs pytest inside `ocr-service` and
+  `tts-service` (see §10).
 
 ---
 
@@ -263,4 +264,47 @@ the shared Zod schemas.
   interface with one implementation per platform and a factory
   (`src/services/speech.ts`). Stores only ever see the interface.
 - **Migrations are committed** (`packages/backend/drizzle/`), uploads are not.
-# osvald
+
+---
+
+## 10. Testing
+
+Two runners, matching the two halves of the stack: **Vitest** for the pnpm
+workspace and **pytest** for the Python services.
+
+### JS/TS — Vitest
+
+```bash
+pnpm test                 # Turbo: shared, backend, frontend
+pnpm coverage             # same, with a V8 coverage report
+pnpm --filter @osvald/backend test:watch
+```
+
+- **`packages/shared`** — the Zod contract and the language detector.
+- **`packages/backend`** — unit tests for the parser/cleanup, the row mappers
+  and the async helpers, plus integration tests that build the real Fastify
+  app with `buildApp()` and drive it through `app.inject()`. Those run against a
+  disposable Postgres database (`osvald_test`, created and migrated by the
+  suite, truncated between tests) with Redis and BullMQ faked — `buildApp()`
+  accepts `{ db, redis, queues }` for exactly this. If Postgres is unreachable
+  the integration suites skip and the unit suite still runs; point them
+  elsewhere with `TEST_DATABASE_URL`.
+- **`packages/frontend`** — `happy-dom`, no browser: speech helpers, `buildCue`
+  and the Pinia stores (`authStore`, `scriptStore`), with the API client mocked.
+
+### Python — pytest
+
+```bash
+pnpm test:python          # both services
+pnpm test:python:ocr
+pnpm test:python:tts
+```
+
+The services are outside the pnpm workspace, so their tests run inside the
+built images (`docker compose run --rm --no-deps`, with the repo mounted at
+`/repo`) where FastAPI, pypdfium2 and numpy already exist. `ocr-service` covers
+page-range parsing, text-layer extraction, reading order and the HTTP contract;
+`tts-service` covers WAV encoding, the LRU audio cache and voice routing.
+
+The parser is the highest-value target and the reason the suite exists: it is
+the piece most likely to regress silently on a new edition.

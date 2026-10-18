@@ -101,4 +101,14 @@ Keychain/Keystore, and there is no refresh-token rotation yet.
 - Native speech (the Capacitor builds run silently).
 - Upload progress percentage, offline script cache.
 - Cheatsheet UI (domain deferred; the `cheatsheetStore` does not exist yet).
-- Tests.
+
+## Testing
+
+```bash
+pnpm --filter @osvald/frontend test
+pnpm --filter @osvald/frontend test:watch
+```
+
+`happy-dom` (no browser) covers the speech helpers, `buildCue` and the Pinia
+stores. The API client is mocked, so the tests describe the stores' state
+machine rather than HTTP.
