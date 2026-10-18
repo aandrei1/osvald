@@ -8,6 +8,7 @@ import {
   registerBodySchema,
   scriptDetailSchema,
   scriptListResponseSchema,
+  ttsVoicesResponseSchema,
   uploadScriptResponseSchema,
   type AuthResponse,
   type CharacterListResponse,
@@ -17,6 +18,8 @@ import {
   type RegisterBody,
   type ScriptDetail,
   type ScriptListResponse,
+  type SynthesizeSpeechBody,
+  type TtsVoicesResponse,
   type UploadScriptResponse,
   type ZodType,
 } from '@osvald/shared';
@@ -131,6 +134,55 @@ export async function request<T>(
   return schema.parse(payload);
 }
 
+/**
+ * Same contract as `request`, for endpoints that answer with bytes.
+ *
+ * Synthesised speech is the only one today. It cannot go through `request`,
+ * which parses every response as JSON — but the auth header, the 401 handling
+ * and the error shape all have to behave identically, so the differences are
+ * kept to the response handling alone.
+ */
+export async function requestBlob(path: string, options: RequestOptions = {}): Promise<Blob> {
+  const headers: Record<string, string> = {};
+  let body: BodyInit | undefined;
+
+  if (options.body !== undefined) {
+    headers['content-type'] = 'application/json';
+    body = JSON.stringify(options.body);
+  }
+
+  const token = options.anonymous === true ? null : (options.token ?? tokenProvider());
+
+  if (token !== null && token.length > 0) {
+    headers.authorization = `Bearer ${token}`;
+  }
+
+  const response = await fetch(`${apiBaseUrl}${path}`, {
+    method: options.method ?? 'GET',
+    headers,
+    body,
+    signal: options.signal,
+  });
+
+  if (!response.ok) {
+    if (response.status === 401 && options.anonymous !== true) {
+      onUnauthorized?.();
+    }
+
+    // The failure body is JSON even though the success body is not.
+    const payload: unknown = await response.json().catch(() => null);
+    const parsedError = apiErrorSchema.safeParse(payload);
+
+    throw new ApiError(
+      parsedError.success ? parsedError.data.message : `Request failed (HTTP ${response.status})`,
+      response.status,
+      parsedError.success ? parsedError.data.details : payload,
+    );
+  }
+
+  return response.blob();
+}
+
 function query(params: Record<string, string | number | undefined>): string {
   const search = new URLSearchParams();
 
@@ -220,6 +272,16 @@ export const api = {
 
   me(token?: string): Promise<MeResponse> {
     return request('/auth/me', meResponseSchema, { token });
+  },
+
+  /** `GET /tts/voices` — the voices the server can synthesise. */
+  listTtsVoices(signal?: AbortSignal): Promise<TtsVoicesResponse> {
+    return request('/tts/voices', ttsVoicesResponseSchema, { signal });
+  },
+
+  /** `POST /tts/speak` — one line of dialogue, rendered to audio. */
+  speak(body: SynthesizeSpeechBody, signal?: AbortSignal): Promise<Blob> {
+    return requestBlob('/tts/speak', { method: 'POST', body, signal });
   },
 };
 

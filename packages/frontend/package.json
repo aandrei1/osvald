@@ -11,6 +11,9 @@
     "typecheck": "vue-tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "coverage": "vitest run --coverage",
     "clean": "rm -rf dist .turbo",
     "cap:sync": "cap sync",
     "cap:add:ios": "cap add ios",
@@ -37,6 +40,7 @@
     "@types/node": "24.13.6",
     "@vitejs/plugin-vue": "6.0.9",
     "eslint": "10.11.0",
+    "happy-dom": "21.0.3",
     "typescript": "6.0.3",
     "vite": "8.3.0",
     "vue-tsc": "3.3.11"

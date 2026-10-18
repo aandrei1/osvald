@@ -91,13 +91,20 @@ export class WebSpeechService implements SpeechService {
     utterance.rate = clamp(request.rate ?? 1, 0.1, 10);
     utterance.pitch = clamp(request.pitch ?? 1, 0, 2);
 
+    // Set the language first, so text still gets the right phonetics when no
+    // voice is chosen or the chosen one has since disappeared.
+    if (request.lang !== undefined && request.lang !== null) {
+      utterance.lang = request.lang;
+    }
+
     if (request.voiceId !== undefined && request.voiceId !== null) {
       const voice = synthesis
         .getVoices()
         .find((candidate) => voiceId(candidate) === request.voiceId);
       if (voice !== undefined) {
         utterance.voice = voice;
-        // Safari mismatches voice and language unless both are set.
+        // Safari mismatches voice and language unless both are set, and the
+        // voice is more specific than the requested tag (`ro-RO` vs `ro`).
         utterance.lang = voice.lang;
       }
     }
@@ -173,6 +180,7 @@ function toSpeechVoice(voice: SpeechSynthesisVoice): SpeechVoice {
     name: voice.name,
     lang: voice.lang,
     isDefault: voice.default,
+    source: 'device',
   };
 }
 

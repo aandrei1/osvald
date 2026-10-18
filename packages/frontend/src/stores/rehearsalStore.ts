@@ -1,9 +1,23 @@
-import type { Character, Line, SceneWithLines } from '@osvald/shared';
+import {
+  detectLanguage,
+  detectLanguageOfLines,
+  type Character,
+  type Line,
+  type SceneWithLines,
+  type SupportedLanguage,
+} from '@osvald/shared';
 import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
 
 import { toErrorMessage } from '@/services/api';
-import { assignVoices, getSpeechService, type SpeechVoice } from '@/services/speech';
+import {
+  assignVoices,
+  getSpeechService,
+  pickVoiceForLanguage,
+  speechTagFor,
+  voicesForLanguage,
+  type SpeechVoice,
+} from '@/services/speech';
 import { useScriptStore } from '@/stores/scriptStore';
 
 /**
@@ -58,6 +72,19 @@ export const useRehearsalStore = defineStore('rehearsal', () => {
   const rate = ref(1);
   const voices = ref<SpeechVoice[]>([]);
   const voiceByCharacterId = ref<Record<string, string>>({});
+
+  /** Set only when the actor overrides the detected language by hand. */
+  const languageOverride = ref<SupportedLanguage | null>(null);
+
+  /**
+   * True when the server voices are unreachable and the device's own engine is
+   * being used instead.
+   *
+   * Mirrored into a ref because the engine reports it as a plain property: the
+   * UI has to re-render when it flips, and that only happens at the few points
+   * below where speech is actually attempted.
+   */
+  const isSpeechDegraded = ref(false);
 
   /** Show only a cue for the actor's own lines, instead of the full text. */
   const hideMyLines = ref(true);
@@ -135,6 +162,84 @@ export const useRehearsalStore = defineStore('rehearsal', () => {
   const isSpeechSupported = computed(() => speech.isSupported());
 
   /* ---------------------------------------------------------------------- */
+  /* Language                                                               */
+  /* ---------------------------------------------------------------------- */
+
+  /**
+   * Lines sampled to decide the script's language.
+   *
+   * A few dozen are plenty — detection is a sum of stopword hits, and reading
+   * a full-length play on every change would be wasted work.
+   */
+  const LANGUAGE_SAMPLE_LINES = 80;
+
+  const detectedLanguage = computed<SupportedLanguage>(() => {
+    const sample: string[] = [];
+
+    for (const scene of scenes.value) {
+      for (const line of scene.lines) {
+        sample.push(line.text);
+        if (sample.length >= LANGUAGE_SAMPLE_LINES) {
+          return detectLanguageOfLines(sample);
+        }
+      }
+    }
+
+    return detectLanguageOfLines(sample);
+  });
+
+  /** The language lines are spoken in: the actor's choice, else the detection. */
+  const language = computed<SupportedLanguage>(
+    () => languageOverride.value ?? detectedLanguage.value,
+  );
+
+  /** Voices this platform has for the current language. Often empty for `ro`. */
+  const voicesForCurrentLanguage = computed(() => voicesForLanguage(voices.value, language.value));
+
+  /**
+   * True when the engine has nothing for the current language.
+   *
+   * Worth surfacing: the scene still runs, but a Romanian script read by an
+   * engine with no Romanian voice installed is what "sounds wrong" in practice,
+   * and the fix is outside the app (install a voice / use another browser).
+   */
+  const isMissingVoiceForLanguage = computed(
+    () => voices.value.length > 0 && voicesForCurrentLanguage.value.length === 0,
+  );
+
+  /**
+   * Language of one line, falling back to the script's.
+   *
+   * Per line rather than per script because mixed scripts are normal — an
+   * English song inside a Romanian play, a quoted foreign phrase — and a line
+   * read by the wrong engine is unintelligible even when the rest is fine.
+   */
+  function languageOf(line: Line): SupportedLanguage {
+    return detectLanguage(line.text, language.value);
+  }
+
+  /** Records whether the engine is currently falling back to local voices. */
+  function syncDegraded(): void {
+    isSpeechDegraded.value = speech.isDegraded ?? false;
+  }
+
+  /** The voice and tag to speak `line` with. */
+  function voicingFor(line: Line): { voiceId: string | null; lang: string } {
+    const lineLanguage = languageOf(line);
+    const assigned =
+      line.characterId === null ? undefined : voiceByCharacterId.value[line.characterId];
+
+    // The character's voice only applies while the line is in the language it
+    // was chosen for; otherwise fall back to any voice for the line's language.
+    const voiceId =
+      lineLanguage === language.value && assigned !== undefined
+        ? assigned
+        : (pickVoiceForLanguage(voices.value, lineLanguage)?.id ?? null);
+
+    return { voiceId, lang: speechTagFor(lineLanguage) };
+  }
+
+  /* ---------------------------------------------------------------------- */
   /* Setup                                                                  */
   /* ---------------------------------------------------------------------- */
 
@@ -144,7 +249,7 @@ export const useRehearsalStore = defineStore('rehearsal', () => {
    * Safe to call repeatedly: an existing assignment is kept, so a voice the
    * actor chose by hand is not overwritten when the page is revisited.
    */
-  async function loadVoices(preferredLang = 'ro'): Promise<void> {
+  async function loadVoices(): Promise<void> {
     try {
       voices.value = await speech.listVoices();
     } catch (caught) {
@@ -152,6 +257,12 @@ export const useRehearsalStore = defineStore('rehearsal', () => {
       return;
     }
 
+    syncDegraded();
+    assignMissingVoices();
+  }
+
+  /** Gives a voice to every character that has none, in the script's language. */
+  function assignMissingVoices(): void {
     const unassigned = characters.value
       .map((character) => character.id)
       .filter((id) => voiceByCharacterId.value[id] === undefined);
@@ -159,13 +270,31 @@ export const useRehearsalStore = defineStore('rehearsal', () => {
     if (unassigned.length > 0) {
       voiceByCharacterId.value = {
         ...voiceByCharacterId.value,
-        ...assignVoices(unassigned, voices.value, preferredLang),
+        ...assignVoices(unassigned, voices.value, language.value),
       };
     }
   }
 
   function setVoiceForCharacter(characterId: string, voiceId: string): void {
     voiceByCharacterId.value = { ...voiceByCharacterId.value, [characterId]: voiceId };
+  }
+
+  /**
+   * Overrides the detected language, or returns to detection with `null`.
+   *
+   * Every assignment is dropped, including hand-picked ones: a voice chosen
+   * for the old language is the wrong engine for the new one, and keeping it
+   * would be the exact problem the override was used to fix.
+   */
+  function setLanguage(next: SupportedLanguage | null): void {
+    if (next === languageOverride.value) {
+      return;
+    }
+
+    pause();
+    languageOverride.value = next;
+    voiceByCharacterId.value = {};
+    assignMissingVoices();
   }
 
   /** Picks the actor's role and rewinds, since cues depend on who they play. */
@@ -270,11 +399,39 @@ export const useRehearsalStore = defineStore('rehearsal', () => {
     try {
       await speech.speak({
         text: line.text,
-        voiceId: line.characterId === null ? null : voiceByCharacterId.value[line.characterId],
+        ...voicingFor(line),
         rate: rate.value,
       });
     } catch (caught) {
       error.value = toErrorMessage(caught);
+    } finally {
+      syncDegraded();
+    }
+  }
+
+  /**
+   * Renders the next line the engine will be asked for, while this one plays.
+   *
+   * Server-side synthesis costs between a third of a second and a second and a
+   * half per line, which would be a silence before every cue. Only one line is
+   * prefetched: the scene stops at the actor's own lines anyway, and queueing
+   * further ahead would compete for the same CPU that is rendering the line
+   * actually being waited on.
+   */
+  function prefetchFrom(index: number): void {
+    for (let cursor = index; cursor < lines.value.length; cursor += 1) {
+      const line = lines.value[cursor];
+
+      if (line === undefined || isMine(line)) {
+        return;
+      }
+
+      if (line.type === 'direction' && !speakDirections.value) {
+        continue;
+      }
+
+      speech.prefetch?.({ text: line.text, ...voicingFor(line), rate: rate.value });
+      return;
     }
   }
 
@@ -313,16 +470,22 @@ export const useRehearsalStore = defineStore('rehearsal', () => {
 
       let outcome: 'completed' | 'interrupted';
 
+      // Start rendering the next line before waiting on this one, so the two
+      // overlap instead of queueing.
+      prefetchFrom(lineIndex.value + 1);
+
       try {
         outcome = await speech.speak({
           text: line.text,
-          voiceId: line.characterId === null ? null : voiceByCharacterId.value[line.characterId],
+          ...voicingFor(line),
           rate: rate.value,
         });
       } catch (caught) {
         error.value = toErrorMessage(caught);
         isRunning.value = false;
         return;
+      } finally {
+        syncDegraded();
       }
 
       // Something else already decided what happens next.
@@ -382,6 +545,9 @@ export const useRehearsalStore = defineStore('rehearsal', () => {
     lineIndex.value = 0;
     isRevealed.value = false;
     error.value = null;
+    // Both are per-script: the cast is gone, and so is the language it was in.
+    languageOverride.value = null;
+    voiceByCharacterId.value = {};
   }
 
   /*
@@ -406,6 +572,8 @@ export const useRehearsalStore = defineStore('rehearsal', () => {
     rate,
     voices,
     voiceByCharacterId,
+    languageOverride,
+    isSpeechDegraded,
     hideMyLines,
     speakDirections,
     autoAdvanceScene,
@@ -424,8 +592,13 @@ export const useRehearsalStore = defineStore('rehearsal', () => {
     progress,
     hasNextScene,
     isSpeechSupported,
+    detectedLanguage,
+    language,
+    voicesForCurrentLanguage,
+    isMissingVoiceForLanguage,
     // actions
     loadVoices,
+    setLanguage,
     setVoiceForCharacter,
     chooseCharacter,
     jumpToMyFirstScene,

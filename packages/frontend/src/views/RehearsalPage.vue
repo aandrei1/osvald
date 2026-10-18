@@ -32,6 +32,7 @@ import {
   settingsOutline,
   volumeHighOutline,
 } from 'ionicons/icons';
+import { LANGUAGE_LABELS, supportedLanguageSchema, type SupportedLanguage } from '@osvald/shared';
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 
 import LineRow from '@/components/LineRow.vue';
@@ -89,6 +90,27 @@ function onRateChange(
 ): void {
   const value = event.detail.value;
   rehearsal.setRate(typeof value === 'number' ? value : value.lower);
+}
+
+const languageOptions = supportedLanguageSchema.options;
+
+/**
+ * Voices for the script's language first.
+ *
+ * The list a browser reports is long and ordered by nothing useful; the handful
+ * that can actually read this script belong at the top of the picker.
+ */
+const pickableVoices = computed(() => {
+  const matching = new Set(rehearsal.voicesForCurrentLanguage.map((voice) => voice.id));
+  return [
+    ...rehearsal.voicesForCurrentLanguage,
+    ...rehearsal.voices.filter((voice) => !matching.has(voice.id)),
+  ];
+});
+
+/** `'auto'` stands for "keep detecting" — the select cannot hold `null`. */
+function onLanguageChange(value: SupportedLanguage | 'auto'): void {
+  rehearsal.setLanguage(value === 'auto' ? null : value);
 }
 
 const sceneLabel = computed(() => {
@@ -190,6 +212,18 @@ const sceneLabel = computed(() => {
         </div>
 
         <ion-progress-bar :value="rehearsal.progress" />
+
+        <!--
+          Server speech is what makes the app sound the same everywhere, so
+          losing it is not a detail to bury in a settings screen: without this
+          banner a stale API URL just sounds like "the voices are wrong".
+        -->
+        <ion-text v-if="rehearsal.isSpeechDegraded" color="warning">
+          <p class="pad">
+            Speech server unavailable — using this device's own voices, which may read
+            {{ LANGUAGE_LABELS[rehearsal.language] }} with the wrong accent.
+          </p>
+        </ion-text>
 
         <ion-text v-if="rehearsal.error !== null" color="danger">
           <p class="pad">{{ rehearsal.error }}</p>
@@ -333,7 +367,42 @@ const sceneLabel = computed(() => {
           </ion-item>
         </ion-list>
 
-        <h3 class="voices__title">Voices</h3>
+        <h3 class="voices__title">Language &amp; voices</h3>
+
+        <ion-list>
+          <ion-item>
+            <ion-select
+              :value="rehearsal.languageOverride ?? 'auto'"
+              label="Language"
+              label-placement="stacked"
+              interface="popover"
+              @ion-change="onLanguageChange($event.detail.value)"
+            >
+              <ion-select-option value="auto">
+                Detect automatically ({{ LANGUAGE_LABELS[rehearsal.detectedLanguage] }})
+              </ion-select-option>
+              <ion-select-option v-for="code in languageOptions" :key="code" :value="code">
+                {{ LANGUAGE_LABELS[code] }}
+              </ion-select-option>
+            </ion-select>
+          </ion-item>
+        </ion-list>
+
+        <ion-text v-if="rehearsal.isSpeechDegraded" color="warning">
+          <p class="pad">
+            The speech server could not be reached, so this device's own voices are being used. They
+            depend on what your operating system has installed — on a machine with no
+            {{ LANGUAGE_LABELS[rehearsal.language] }} voice, lines will sound wrong.
+          </p>
+        </ion-text>
+
+        <ion-text v-else-if="rehearsal.isMissingVoiceForLanguage" color="warning">
+          <p class="pad">
+            No {{ LANGUAGE_LABELS[rehearsal.language] }} voice is available, so lines will be read
+            by the default engine and may sound wrong. Pick a voice below by hand.
+          </p>
+        </ion-text>
+
         <ion-note v-if="rehearsal.voices.length === 0" class="pad">
           No speech voices were reported by this platform.
         </ion-note>
@@ -347,12 +416,9 @@ const sceneLabel = computed(() => {
               interface="popover"
               @ion-change="rehearsal.setVoiceForCharacter(character.id, $event.detail.value)"
             >
-              <ion-select-option
-                v-for="voice in rehearsal.voices"
-                :key="voice.id"
-                :value="voice.id"
-              >
-                {{ voice.name }} ({{ voice.lang }})
+              <ion-select-option v-for="voice in pickableVoices" :key="voice.id" :value="voice.id">
+                {{ voice.name }} ({{ voice.lang }}) ·
+                {{ voice.source === 'server' ? 'server' : 'this device' }}
               </ion-select-option>
             </ion-select>
           </ion-item>
