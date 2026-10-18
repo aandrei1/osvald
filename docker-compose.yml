@@ -1,4 +1,4 @@
-# Local development stack: Postgres, Redis, the Fastify API and the Python OCR service.
+# Local development stack: Postgres, Redis, the Fastify API and the Python services.
 #
 #   pnpm docker:up      # start everything
 #   pnpm docker:logs    # follow logs
@@ -10,6 +10,7 @@
 # Images:
 #   - backend/worker  -> packages/backend/Dockerfile (Node 24 + pnpm workspace)
 #   - ocr-service     -> packages/ocr-service/Dockerfile (Python 3.12 + FastAPI)
+#   - tts-service     -> packages/tts-service/Dockerfile (Python 3.12 + FastAPI)
 #   - postgres/redis  -> upstream images, nothing to build
 #   - frontend        -> no image: Vite runs on the host, iOS/Android via Capacitor
 #
@@ -68,6 +69,7 @@ services:
       OCR_SERVICE_URL: http://ocr-service:8000
       OCR_LANGUAGE: ${OCR_LANGUAGE:-ro}
       OCR_PDF_TIMEOUT_MS: ${OCR_PDF_TIMEOUT_MS:-900000}
+      TTS_SERVICE_URL: http://tts-service:8000
       JWT_SECRET: ${JWT_SECRET:-dev-only-secret-change-me-min-32-characters-long}
       JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-1h}
       CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:5173,http://localhost:4173,http://localhost,capacitor://localhost}
@@ -151,6 +153,42 @@ services:
       retries: 5
       start_period: 10s
 
+  # Server-side speech synthesis. The app uses it instead of the browser's
+  # Web Speech API so the voices are the same on every operating system —
+  # see packages/tts-service/README.md.
+  tts-service:
+    build:
+      context: ./packages/tts-service
+      args:
+        # Bake the voice models into the image (~100 MB). Set to `false` for a
+        # quick build; the service then downloads them on first use instead.
+        TTS_PRELOAD_VOICES: ${TTS_PRELOAD_VOICES:-true}
+    restart: unless-stopped
+    environment:
+      TTS_PROVIDERS: ${TTS_PROVIDERS:-piper,mms}
+      TTS_LOG_LEVEL: ${LOG_LEVEL:-info}
+      TTS_DATA_DIR: /data
+      TTS_CACHE_MAX_BYTES: ${TTS_CACHE_MAX_BYTES:-536870912}
+      TTS_MAX_CONCURRENCY: ${TTS_MAX_CONCURRENCY:-2}
+    ports:
+      - '${TTS_SERVICE_PORT:-8002}:8000'
+    volumes:
+      # Keeps the models and the rendered-line cache across rebuilds.
+      - tts-data:/data
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'python',
+          '-c',
+          "import urllib.request;urllib.request.urlopen('http://localhost:8000/health')",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
 volumes:
   postgres-data:
   redis-data:
+  tts-data:
