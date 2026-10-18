@@ -62,6 +62,14 @@ export async function collectHealth({ db, redis }: HealthProbes): Promise<Health
         throw new Error(`HTTP ${response.status}`);
       }
     }),
+    probe('ttsService', async () => {
+      const response = await fetch(`${env.TTS_SERVICE_URL}/health`, {
+        signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+      });
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+    }),
   ]);
 
   return {

@@ -56,6 +56,15 @@ const envSchema = z.object({
   /** Language pack the OCR service is configured with. */
   OCR_LANGUAGE: z.string().min(2).default('ro'),
 
+  // Python TTS service
+  TTS_SERVICE_URL: z.url().default('http://localhost:8002'),
+  TTS_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(5_000),
+  /**
+   * One line of CPU synthesis is under a second warm, but the first call to a
+   * voice also loads (or downloads) its model.
+   */
+  TTS_SYNTHESIS_TIMEOUT_MS: z.coerce.number().int().positive().default(60_000),
+
   // Queue worker
   SCRIPT_PARSING_WORKER_ENABLED: booleanFromString(),
   SCRIPT_PARSING_CONCURRENCY: z.coerce.number().int().positive().default(2),

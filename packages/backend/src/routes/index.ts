@@ -3,6 +3,7 @@ import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import { authRoutes } from './auth/index.js';
 import { healthRoutes } from './health.js';
 import { scriptRoutes } from './scripts/index.js';
+import { ttsRoutes } from './tts/index.js';
 
 /**
  * Route tree. One module per resource, each mounted under its own prefix so
@@ -15,4 +16,5 @@ export const registerRoutes: FastifyPluginAsyncZod = async (app) => {
   await app.register(healthRoutes);
   await app.register(scriptRoutes, { prefix: '/scripts' });
   await app.register(authRoutes, { prefix: '/auth' });
+  await app.register(ttsRoutes, { prefix: '/tts' });
 };
