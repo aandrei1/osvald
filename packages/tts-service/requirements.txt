@@ -1,0 +1,9 @@
+# Osvald TTS service — pinned for reproducible images (Python >= 3.10).
+fastapi==0.141.1
+uvicorn[standard]==0.53.0
+
+# Piper: ONNX VITS synthesis plus the bundled espeak-ng phonemizer.
+piper-tts==1.8.0
+# Used directly by the MMS provider; also what piper-tts pulls in.
+onnxruntime==1.31.0
+numpy==2.5.4

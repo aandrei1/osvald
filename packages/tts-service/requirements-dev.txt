@@ -1,0 +1,5 @@
+# Test-only dependencies for `packages/tts-service`.
+# Install inside the service image (numpy is already there):
+#   pip install -r requirements-dev.txt
+#   python -m pytest
+pytest==8.4.2
