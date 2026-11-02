@@ -84,6 +84,100 @@ export function setUnauthorizedHandler(handler: () => void): void {
   onUnauthorized = handler;
 }
 
+/** Per-attempt budget for JSON calls. */
+const REQUEST_TIMEOUT_MS = 15_000;
+/** Speech synthesis can legitimately take longer than a JSON call. */
+const BLOB_TIMEOUT_MS = 60_000;
+/** Extra attempts after the first, GET only. */
+const MAX_RETRIES = 2;
+const RETRY_BASE_DELAY_MS = 300;
+/** Gateway-style failures that usually clear up on their own. */
+const RETRYABLE_STATUSES = new Set([502, 503, 504]);
+
+interface FetchPolicyInit extends RequestInit {
+  timeoutMs: number;
+}
+
+function sleep(ms: number, signal: AbortSignal | null | undefined): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted === true) {
+      reject(signal.reason);
+      return;
+    }
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      reject(signal?.reason);
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+/**
+ * `fetch` with a per-attempt timeout and, for GET only, retry with exponential
+ * backoff on network failures and gateway errors.
+ *
+ * Non-GET calls are never retried: a POST that reached the server but lost its
+ * response would otherwise run twice. A caller abort is final in every case —
+ * it is neither retried nor reported as a timeout.
+ */
+async function fetchWithPolicy(url: string, init: FetchPolicyInit): Promise<Response> {
+  const { timeoutMs, signal: callerSignal, ...rest } = init;
+  const retries = (rest.method ?? 'GET') === 'GET' ? MAX_RETRIES : 0;
+
+  for (let attempt = 0; ; attempt += 1) {
+    // Not `AbortSignal.timeout`/`any`: older WebViews (Safari < 17.4) lack them.
+    const controller = new AbortController();
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, timeoutMs);
+    const forwardAbort = (): void => {
+      controller.abort(callerSignal?.reason);
+    };
+    if (callerSignal?.aborted === true) {
+      forwardAbort();
+    } else {
+      callerSignal?.addEventListener('abort', forwardAbort, { once: true });
+    }
+    const canRetry = attempt < retries;
+
+    try {
+      const response = await fetch(url, { ...rest, signal: controller.signal });
+
+      if (canRetry && RETRYABLE_STATUSES.has(response.status)) {
+        await sleep(RETRY_BASE_DELAY_MS * 2 ** attempt, callerSignal);
+        continue;
+      }
+
+      return response;
+    } catch (error) {
+      if (callerSignal?.aborted === true) {
+        throw error;
+      }
+
+      if (canRetry) {
+        await sleep(RETRY_BASE_DELAY_MS * 2 ** attempt, callerSignal);
+        continue;
+      }
+
+      if (timedOut) {
+        throw new ApiError('The request timed out', 0);
+      }
+
+      throw error;
+    } finally {
+      // The budget covers waiting for the response headers, not reading the body.
+      clearTimeout(timer);
+      callerSignal?.removeEventListener('abort', forwardAbort);
+    }
+  }
+}
+
 export async function request<T>(
   path: string,
   schema: ZodType<T>,
@@ -106,12 +200,12 @@ export async function request<T>(
     headers.authorization = `Bearer ${token}`;
   }
 
-  // TODO(api): retry/backoff for idempotent GETs, plus a request timeout.
-  const response = await fetch(`${apiBaseUrl}${path}`, {
+  const response = await fetchWithPolicy(`${apiBaseUrl}${path}`, {
     method: options.method ?? 'GET',
     headers,
     body,
     signal: options.signal,
+    timeoutMs: REQUEST_TIMEOUT_MS,
   });
 
   // 204 carries no body, so parsing it would throw.
@@ -157,11 +251,12 @@ export async function requestBlob(path: string, options: RequestOptions = {}): P
     headers.authorization = `Bearer ${token}`;
   }
 
-  const response = await fetch(`${apiBaseUrl}${path}`, {
+  const response = await fetchWithPolicy(`${apiBaseUrl}${path}`, {
     method: options.method ?? 'GET',
     headers,
     body,
     signal: options.signal,
+    timeoutMs: BLOB_TIMEOUT_MS,
   });
 
   if (!response.ok) {
