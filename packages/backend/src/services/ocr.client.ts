@@ -63,11 +63,11 @@ export class OcrServiceError extends Error {
   /** A 4xx/501 will fail the same way on every retry; a 5xx may not. */
   readonly retryable: boolean;
 
-  constructor(message: string, statusCode: number) {
+  constructor(message: string, statusCode: number, retryable?: boolean) {
     super(message);
     this.name = 'OcrServiceError';
     this.statusCode = statusCode;
-    this.retryable = statusCode >= 500 && statusCode !== 501;
+    this.retryable = retryable ?? (statusCode >= 500 && statusCode !== 501);
   }
 }
 
@@ -126,7 +126,19 @@ export function createOcrClient(): OcrClient {
         dispatcher: ocrDispatcher,
       })) as unknown as Response;
     } catch (error) {
-      // Unreachable or timed out: worth another attempt later.
+      // A timeout means the document is too slow for this machine, and a retry
+      // would take exactly as long again; fail now so the user sees why.
+      if (error instanceof Error && error.name === 'TimeoutError') {
+        throw new OcrServiceError(
+          `OCR did not finish within ${Math.round(timeoutMs / 1000)} s. ` +
+            'The document may have too many scanned pages for this machine; ' +
+            'raise OCR_PDF_TIMEOUT_MS or upload fewer pages.',
+          504,
+          false,
+        );
+      }
+
+      // Unreachable: worth another attempt later.
       throw new OcrServiceError(
         `OCR service at ${env.OCR_SERVICE_URL} is unreachable: ${
           error instanceof Error ? error.message : 'unknown error'
