@@ -45,6 +45,14 @@ export const useRehearsalStore = defineStore('rehearsal', () => {
   const sceneIndex = ref(0);
   const lineIndex = ref(0);
 
+  /**
+   * Ends (inclusive line indices in the current scene) of the A/B loop, used to
+   * drill a difficult passage. Both must be set for the loop to take effect.
+   * Tied to one scene, so every scene change clears them.
+   */
+  const loopStart = ref<number | null>(null);
+  const loopEnd = ref<number | null>(null);
+
   const isRunning = ref(false);
   /** Stopped on one of the actor's lines, waiting for them to deliver it. */
   const isWaitingForMe = ref(false);
@@ -168,6 +176,29 @@ export const useRehearsalStore = defineStore('rehearsal', () => {
   const progress = computed(() =>
     lines.value.length > 0 ? Math.min(lineIndex.value / lines.value.length, 1) : 0,
   );
+
+  /**
+   * The A/B loop as the engine sees it, or `null` when there is nothing to loop.
+   *
+   * A range with no line the engine would stop on or speak — only stage
+   * directions that are not read aloud — is dropped here rather than looped:
+   * `run()` would skip every line without awaiting and spin forever.
+   */
+  const loopRange = computed<{ start: number; end: number } | null>(() => {
+    if (loopStart.value === null || loopEnd.value === null) {
+      return null;
+    }
+
+    const start = loopStart.value;
+    const end = Math.min(loopEnd.value, lines.value.length - 1);
+    const hasContent = lines.value
+      .slice(start, end + 1)
+      .some((line) => isMine(line) || line.type !== 'direction' || speakDirections.value);
+
+    return hasContent ? { start, end } : null;
+  });
+
+  const isLooping = computed(() => loopRange.value !== null);
 
   const hasNextScene = computed(() => sceneIndex.value < scenes.value.length - 1);
   const isSpeechSupported = computed(() => speech.isSupported());
@@ -306,8 +337,39 @@ export const useRehearsalStore = defineStore('rehearsal', () => {
     halt();
   }
 
+  function clearLoop(): void {
+    loopStart.value = null;
+    loopEnd.value = null;
+  }
+
+  /** Clamps a line index into the current scene. */
+  function clampLine(index: number): number {
+    return Math.min(Math.max(index, 0), Math.max(lines.value.length - 1, 0));
+  }
+
+  /** Marks point A. Point B is pushed forward if it would end up before it. */
+  function setLoopStart(index: number): void {
+    const start = clampLine(index);
+    loopStart.value = start;
+
+    if (loopEnd.value !== null && loopEnd.value < start) {
+      loopEnd.value = start;
+    }
+  }
+
+  /** Marks point B. With no point A yet, the loop starts at the same line. */
+  function setLoopEnd(index: number): void {
+    const end = clampLine(index);
+    loopEnd.value = end;
+
+    if (loopStart.value === null || loopStart.value > end) {
+      loopStart.value = end;
+    }
+  }
+
   function selectScene(index: number): void {
     pause();
+    clearLoop();
     sceneIndex.value = Math.min(Math.max(index, 0), Math.max(scenes.value.length - 1, 0));
     lineIndex.value = 0;
     isRevealed.value = false;
@@ -324,6 +386,7 @@ export const useRehearsalStore = defineStore('rehearsal', () => {
    */
   function setScope(sceneId: string | null): void {
     pause();
+    clearLoop();
     scopeSceneId.value = sceneId;
     autoAdvanceScene.value = sceneId === null;
     sceneIndex.value = 0;
@@ -433,6 +496,14 @@ export const useRehearsalStore = defineStore('rehearsal', () => {
    */
   async function run(token: number): Promise<void> {
     while (isRunning.value && token === runToken) {
+      // Past point B: back to point A. Checked before the end-of-scene branch so
+      // a loop ending on the scene's last line never rolls into the next scene.
+      const range = loopRange.value;
+      if (range !== null && lineIndex.value > range.end) {
+        lineIndex.value = range.start;
+        isRevealed.value = false;
+      }
+
       const line = lines.value[lineIndex.value];
 
       if (line === undefined) {
@@ -532,6 +603,7 @@ export const useRehearsalStore = defineStore('rehearsal', () => {
     pause();
     myCharacterId.value = null;
     scopeSceneId.value = null;
+    clearLoop();
     sceneIndex.value = 0;
     lineIndex.value = 0;
     isRevealed.value = false;
@@ -545,7 +617,6 @@ export const useRehearsalStore = defineStore('rehearsal', () => {
    * TODO(rehearsal):
    *   - remember the role, scene and rate per script (Capacitor Preferences) so
    *     a rehearsal resumes where it stopped
-   *   - A/B section looping for a difficult passage
    *   - keep the screen awake while a scene is running (needs a Capacitor
    *     keep-awake plugin — dependency decision pending)
    *   - speech recognition to detect that the actor finished their line, so the
@@ -558,6 +629,8 @@ export const useRehearsalStore = defineStore('rehearsal', () => {
     scopeSceneId,
     sceneIndex,
     lineIndex,
+    loopStart,
+    loopEnd,
     isRunning,
     isWaitingForMe,
     isRevealed,
@@ -586,6 +659,8 @@ export const useRehearsalStore = defineStore('rehearsal', () => {
     isMyTurn,
     cue,
     progress,
+    loopRange,
+    isLooping,
     hasNextScene,
     isSpeechSupported,
     detectedLanguage,
@@ -600,6 +675,9 @@ export const useRehearsalStore = defineStore('rehearsal', () => {
     jumpToMyFirstScene,
     setScope,
     selectScene,
+    setLoopStart,
+    setLoopEnd,
+    clearLoop,
     goToLine,
     nextLine,
     previousLine,
