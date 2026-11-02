@@ -4,9 +4,6 @@ PaddleOCR is an optional dependency: the default image ships without it so the
 container stays small and boots fast, which is enough for PDFs that already
 carry a text layer. When it is installed (`--build-arg WITH_PADDLE=true`) the
 engine below handles scanned documents.
-
-The recognition and reading-order logic mirrors `codPython/script.py`, the
-standalone script this service was derived from.
 """
 
 from __future__ import annotations

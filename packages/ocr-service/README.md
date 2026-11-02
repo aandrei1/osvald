@@ -18,9 +18,6 @@ The choice is made per page, not per document, because a scanned book often has
 a digitally produced title page and a digital script sometimes contains scanned
 inserts.
 
-The recognition and reading-order logic mirrors `codPython/script.py`, the
-standalone script this service was derived from.
-
 ## Endpoints
 
 | Method | Path       | Notes                                                                          |

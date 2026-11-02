@@ -36,8 +36,7 @@ class PdfExtraction:
 def parse_page_range(spec: str, total_pages: int) -> range:
     """Interpret `all`, `12` (first 12) or `5-20` (inclusive, 1-based).
 
-    Mirrors the `--pages` flag of `codPython/script.py` so the two entry points
-    behave the same.
+    `all` means every page; a bare number means the first N pages.
     """
     spec = (spec or "all").strip().lower()
 
