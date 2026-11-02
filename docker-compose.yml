@@ -143,6 +143,11 @@ services:
       # Most pages one request may OCR; 0 lifts the cap.
       OCR_MAX_OCR_PAGES: ${OCR_MAX_OCR_PAGES:-80}
       OCR_MAX_UPLOAD_BYTES: ${OCR_MAX_UPLOAD_BYTES:-67108864}
+      # Longest side a page is rendered at before OCR; 0 lifts the cap.
+      OCR_RENDER_MAX_SIDE: ${OCR_RENDER_MAX_SIDE:-2500}
+      # Empty = every CPU Docker gives the container (fits a PC and a laptop).
+      OCR_CPU_THREADS: ${OCR_CPU_THREADS:-}
+      OCR_ENABLE_MKLDNN: ${OCR_ENABLE_MKLDNN:-true}
     ports:
       - '${OCR_SERVICE_PORT:-8001}:8000'
     healthcheck:

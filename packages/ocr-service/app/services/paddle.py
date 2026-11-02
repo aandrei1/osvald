@@ -64,6 +64,11 @@ class PaddleOcrEngine:
     several seconds and downloads weights, so `/health` must stay answerable
     while that happens. A lock keeps two concurrent requests from building two
     copies.
+
+    Recognition itself is serialised too. The predictor is not thread-safe, and
+    two pages in flight at once double the memory without finishing any sooner,
+    since each already uses every thread it is given — on a laptop's Docker VM
+    that is the difference between slow and killed.
     """
 
     name = "paddleocr"
@@ -72,6 +77,7 @@ class PaddleOcrEngine:
         self.language = language or settings.language
         self._model: Any | None = None
         self._lock = threading.Lock()
+        self._predict_lock = threading.Lock()
 
     @property
     def available(self) -> bool:
@@ -99,13 +105,20 @@ class PaddleOcrEngine:
                     "that already carry a text layer."
                 ) from exc
 
-            logger.info("loading PaddleOCR (lang=%s)", self.language)
+            logger.info(
+                "loading PaddleOCR (lang=%s, cpu_threads=%s, mkldnn=%s)",
+                self.language,
+                settings.cpu_threads,
+                settings.enable_mkldnn,
+            )
             self._model = PaddleOCR(
                 lang=self.language,
                 # The extra preprocessing stages only slow down a flatbed scan.
                 use_doc_orientation_classify=False,
                 use_doc_unwarping=False,
                 use_textline_orientation=False,
+                cpu_threads=settings.cpu_threads,
+                enable_mkldnn=settings.enable_mkldnn,
             )
             logger.info("PaddleOCR ready")
 
@@ -116,7 +129,10 @@ class PaddleOcrEngine:
         model = self._load_model()
         blocks: list[TextBlock] = []
 
-        for result in model.predict(image):
+        with self._predict_lock:
+            results = list(model.predict(image))
+
+        for result in results:
             texts = list(result.get("rec_texts") or [])
             boxes = result.get("rec_boxes")
             scores = list(result.get("rec_scores") or [])

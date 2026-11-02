@@ -76,6 +76,7 @@ async def recognize_pdf(
             scale=scale,
             force_ocr=force_ocr,
             max_ocr_pages=settings.max_ocr_pages,
+            render_max_side=settings.render_max_side,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

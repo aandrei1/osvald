@@ -6,7 +6,12 @@ from pathlib import Path
 
 import pytest
 
-from app.services.pdf import MIN_TEXT_LAYER_CHARS, extract_text, parse_page_range
+from app.services.pdf import (
+    MIN_TEXT_LAYER_CHARS,
+    extract_text,
+    parse_page_range,
+    render_scale,
+)
 
 # `tests/` → `ocr-service/` → `packages/` → repository root.
 SAMPLE_PDF = Path(__file__).resolve().parents[3] / "samples" / "avarul-excerpt.pdf"
@@ -70,3 +75,20 @@ class TestExtractText:
                 force_ocr=True,
                 max_ocr_pages=0,
             )
+
+
+class TestRenderScale:
+    def test_an_a4_page_keeps_the_requested_scale(self) -> None:
+        assert render_scale(595, 842, 2.0, 2500) == 2.0
+
+    def test_a_page_holding_a_full_size_photo_is_shrunk_to_the_cap(self) -> None:
+        scale = render_scale(2268, 3024, 2.0, 2500)
+
+        assert scale == pytest.approx(2500 / 3024)
+        assert round(3024 * scale) == 2500
+
+    def test_landscape_pages_are_capped_on_their_longest_side(self) -> None:
+        assert round(4000 * render_scale(4000, 1000, 2.0, 2000)) == 2000
+
+    def test_zero_disables_the_cap(self) -> None:
+        assert render_scale(2268, 3024, 2.0, 0) == 2.0

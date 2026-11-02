@@ -24,6 +24,19 @@ logger = logging.getLogger("osvald.ocr.pdf")
 MIN_TEXT_LAYER_CHARS = 40
 
 
+def render_scale(width_pt: float, height_pt: float, scale: float, max_side: int) -> float:
+    """Scale to render a page at: `scale`, shrunk so no side exceeds `max_side` px.
+
+    PDF sizes are in points, so `scale=2` suits an A4 scan (595×842 pt → ~1190×1684
+    px) but turns a page that embeds a phone photo at full size (2268×3024 pt)
+    into a 4536×6048 bitmap. `max_side=0` disables the cap.
+    """
+    longest = max(width_pt, height_pt)
+    if max_side <= 0 or longest <= 0:
+        return scale
+    return min(scale, max_side / longest)
+
+
 @dataclass(frozen=True)
 class PdfExtraction:
     pages: list[PdfPageText]
@@ -65,6 +78,7 @@ def extract_text(
     scale: float = 2.0,
     force_ocr: bool = False,
     max_ocr_pages: int = 0,
+    render_max_side: int = 0,
 ) -> PdfExtraction:
     """Extract the text of every requested page.
 
@@ -95,7 +109,12 @@ def extract_text(
                 needs_ocr = force_ocr or len(text.strip()) < MIN_TEXT_LAYER_CHARS
 
                 if needs_ocr and (max_ocr_pages == 0 or ocr_used < max_ocr_pages):
-                    ocr_text = _ocr_page(page, scale=scale, page_index=page_index)
+                    width, height = page.get_size()
+                    ocr_text = _ocr_page(
+                        page,
+                        scale=render_scale(width, height, scale, render_max_side),
+                        page_index=page_index,
+                    )
 
                     # Keep the text layer if OCR did no better (a genuinely
                     # blank page stays blank instead of gaining OCR noise).

@@ -6,4 +6,7 @@
 #
 #   docker compose build --build-arg WITH_PADDLE=true ocr-service
 paddleocr==3.7.0
-paddlepaddle==3.3.1
+# Pinned below 3.3: 3.3.x ships no linux/aarch64 wheel (Docker on Apple
+# Silicon), and its oneDNN path fails with "ConvertPirAttribute2RuntimeAttribute
+# not support". 3.2.2 has both wheels and works with oneDNN on x86.
+paddlepaddle==3.2.2
