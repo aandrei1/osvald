@@ -24,10 +24,11 @@ COPY requirements.txt requirements-ocr.txt ./
 RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt
 
-# PaddleOCR needs OpenCV's runtime libraries, which the slim image omits.
+# PaddleOCR needs OpenCV's runtime libraries and OpenMP (`libgomp1`, loaded by
+# `libpaddle.so`), which the slim image omits.
 RUN if [ "$WITH_PADDLE" = "true" ]; then \
       apt-get update \
-      && apt-get install -y --no-install-recommends libgl1 libglib2.0-0 \
+      && apt-get install -y --no-install-recommends libgl1 libglib2.0-0 libgomp1 \
       && rm -rf /var/lib/apt/lists/* \
       && pip install --no-cache-dir -r requirements-ocr.txt; \
     fi
