@@ -14,6 +14,7 @@ digital title page, and a digital script sometimes contains scanned inserts.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from app.schemas import PdfPageText
@@ -22,6 +23,10 @@ logger = logging.getLogger("osvald.ocr.pdf")
 
 #: Below this many characters a page is treated as having no usable text layer.
 MIN_TEXT_LAYER_CHARS = 40
+
+
+class ExtractionCancelled(Exception):
+    """The caller went away; the remaining pages are not worth recognising."""
 
 
 def render_scale(width_pt: float, height_pt: float, scale: float, max_side: int) -> float:
@@ -79,6 +84,7 @@ def extract_text(
     force_ocr: bool = False,
     max_ocr_pages: int = 0,
     render_max_side: int = 0,
+    should_cancel: Callable[[], bool] | None = None,
 ) -> PdfExtraction:
     """Extract the text of every requested page.
 
@@ -86,6 +92,10 @@ def extract_text(
     no cap). OCR costs seconds per page, so an unbounded 300-page scan would
     hold a queue worker for the better part of an hour; the cap keeps the job
     bounded and reports what was skipped.
+
+    `should_cancel` is polled before each page. The HTTP caller times out or
+    restarts long before a slow scan finishes, and without this check the work
+    carries on for nobody — competing for the CPU with the retry that replaced it.
     """
     import pypdfium2 as pdfium
 
@@ -100,6 +110,11 @@ def extract_text(
         engine_name = "text-layer"
 
         for page_index in page_range:
+            if should_cancel is not None and should_cancel():
+                raise ExtractionCancelled(
+                    f"cancelled before page {page_index + 1} of {total_pages}"
+                )
+
             page = document[page_index]
 
             try:

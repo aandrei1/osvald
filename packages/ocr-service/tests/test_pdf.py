@@ -8,6 +8,7 @@ import pytest
 
 from app.services.pdf import (
     MIN_TEXT_LAYER_CHARS,
+    ExtractionCancelled,
     extract_text,
     parse_page_range,
     render_scale,
@@ -92,3 +93,43 @@ class TestRenderScale:
 
     def test_zero_disables_the_cap(self) -> None:
         assert render_scale(2268, 3024, 2.0, 0) == 2.0
+
+
+def _two_page_pdf() -> bytes:
+    """The one-page sample twice, so both pages still have a text layer."""
+    import io
+
+    import pypdfium2 as pdfium
+
+    document = pdfium.PdfDocument(SAMPLE_PDF.read_bytes())
+    document.import_pages(pdfium.PdfDocument(SAMPLE_PDF.read_bytes()))
+    buffer = io.BytesIO()
+    document.save(buffer)
+    return buffer.getvalue()
+
+
+class TestCancellation:
+    def test_stops_before_the_first_page_once_cancelled(self) -> None:
+        with pytest.raises(ExtractionCancelled, match="before page 1"):
+            extract_text(
+                SAMPLE_PDF.read_bytes(),
+                pages="all",
+                language="ro",
+                should_cancel=lambda: True,
+            )
+
+    def test_checks_before_every_page(self) -> None:
+        calls = 0
+
+        def cancel_after_first_page() -> bool:
+            nonlocal calls
+            calls += 1
+            return calls > 1
+
+        with pytest.raises(ExtractionCancelled, match="before page 2"):
+            extract_text(
+                _two_page_pdf(),
+                pages="all",
+                language="ro",
+                should_cancel=cancel_after_first_page,
+            )

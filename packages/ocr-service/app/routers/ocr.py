@@ -2,15 +2,33 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
+import asyncio
+import logging
+import threading
+
+from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile
 from starlette.concurrency import run_in_threadpool
 
 from app.config import settings
 from app.schemas import OcrResponse, PdfTextResponse
 from app.services.paddle import get_engine
-from app.services.pdf import extract_text
+from app.services.pdf import ExtractionCancelled, extract_text
+
+logger = logging.getLogger("osvald.ocr.router")
 
 router = APIRouter(tags=["ocr"])
+
+#: How often a long extraction checks whether its caller is still connected.
+DISCONNECT_POLL_SECONDS = 1.0
+
+
+async def _watch_disconnect(request: Request, cancelled: threading.Event) -> None:
+    """Set `cancelled` once the client hangs up (timeout, worker restart)."""
+    while not cancelled.is_set():
+        if await request.is_disconnected():
+            cancelled.set()
+            return
+        await asyncio.sleep(DISCONNECT_POLL_SECONDS)
 
 
 async def _read_upload(upload: UploadFile, limit: int) -> bytes:
@@ -41,6 +59,7 @@ async def _read_upload(upload: UploadFile, limit: int) -> bytes:
     summary="Extract the text of a PDF, page by page",
 )
 async def recognize_pdf(
+    request: Request,
     file: UploadFile = File(..., description="The PDF to read"),
     pages: str = Form("all", description="`all`, `12` (first 12) or `5-20` (inclusive)"),
     language: str | None = Form(None, description="OCR language pack; defaults to OCR_LANGUAGE"),
@@ -65,6 +84,11 @@ async def recognize_pdf(
     payload = await _read_upload(file, settings.max_upload_bytes)
     resolved_language = language or settings.language
 
+    # Set when the caller disconnects, so the remaining pages are skipped
+    # instead of being recognised for nobody.
+    cancelled = threading.Event()
+    watcher = asyncio.create_task(_watch_disconnect(request, cancelled))
+
     try:
         # Both strategies are CPU-bound and synchronous, so they must not run on
         # the event loop: a long document would block every other request.
@@ -77,9 +101,17 @@ async def recognize_pdf(
             force_ocr=force_ocr,
             max_ocr_pages=settings.max_ocr_pages,
             render_max_side=settings.render_max_side,
+            should_cancel=cancelled.is_set,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except ExtractionCancelled as exc:
+        logger.info("client disconnected, stopped early: %s", exc)
+        # Nobody reads this response; 499 is nginx's "client closed request".
+        raise HTTPException(status_code=499, detail=str(exc)) from exc
+    finally:
+        cancelled.set()
+        watcher.cancel()
 
     return PdfTextResponse(
         pages=extraction.pages,
