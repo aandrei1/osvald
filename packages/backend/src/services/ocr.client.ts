@@ -1,3 +1,4 @@
+import { Agent, FormData, fetch as undiciFetch } from 'undici';
 import { z } from 'zod';
 
 import { env } from '../config/env.js';
@@ -105,16 +106,25 @@ async function describeFailure(response: Response): Promise<string> {
   return `OCR service responded with HTTP ${response.status}`;
 }
 
+/**
+ * Node's built-in fetch gives up after 300 s without response headers, whatever
+ * the abort signal says. CPU OCR of a few phone photos easily takes longer, and
+ * the service only answers once every page is done, so lift undici's own
+ * timeouts and leave the deadline to `AbortSignal.timeout` at the call site.
+ */
+const ocrDispatcher = new Agent({ headersTimeout: 0, bodyTimeout: 0 });
+
 export function createOcrClient(): OcrClient {
   const post = async (path: string, body: FormData, timeoutMs: number): Promise<unknown> => {
     let response: Response;
 
     try {
-      response = await fetch(`${env.OCR_SERVICE_URL}${path}`, {
+      response = (await undiciFetch(`${env.OCR_SERVICE_URL}${path}`, {
         method: 'POST',
         body,
         signal: AbortSignal.timeout(timeoutMs),
-      });
+        dispatcher: ocrDispatcher,
+      })) as unknown as Response;
     } catch (error) {
       // Unreachable or timed out: worth another attempt later.
       throw new OcrServiceError(
