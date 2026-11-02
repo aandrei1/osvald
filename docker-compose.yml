@@ -74,6 +74,9 @@ services:
       JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-1h}
       CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:5173,http://localhost:4173,http://localhost,capacitor://localhost}
       UPLOAD_DIR: /repo/packages/backend/uploads
+    # Shared with `worker`, which reads the files this service stores.
+    volumes:
+      - uploads-data:/repo/packages/backend/uploads
     ports:
       - '${BACKEND_PORT:-3000}:3000'
     depends_on:
@@ -116,6 +119,8 @@ services:
       OCR_PDF_TIMEOUT_MS: ${OCR_PDF_TIMEOUT_MS:-900000}
       JWT_SECRET: ${JWT_SECRET:-dev-only-secret-change-me-min-32-characters-long}
       UPLOAD_DIR: /repo/packages/backend/uploads
+    volumes:
+      - uploads-data:/repo/packages/backend/uploads
     depends_on:
       postgres:
         condition: service_healthy
@@ -192,3 +197,4 @@ volumes:
   postgres-data:
   redis-data:
   tts-data:
+  uploads-data:
