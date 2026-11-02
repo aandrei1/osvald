@@ -1,19 +1,16 @@
 /* ---------------------------------------------------------------------------
  * Osvald theme tokens.
  *
- * Only the minimum Ionic variables are overridden here so the boilerplate is
- * usable; the real palette (typography for long-form reading, dark mode tuning,
- * cue colours) is a design task.
- *
- * TODO(theme): replace these with the product palette and add a
- * `variables-dark.css` variant once the design exists.
+ * Ionic's `dark.system.css` palette (imported in main.ts) supplies the base
+ * dark surfaces; this file layers the brand colour, the cue colour and the
+ * script reading surface on top, for both schemes.
  * ------------------------------------------------------------------------- */
 
 :root {
   --ion-font-family:
     -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
 
-  /* Primary = rehearsal brand colour. */
+  /* Primary = rehearsal brand colour (indigo). */
   --ion-color-primary: #4338ca;
   --ion-color-primary-rgb: 67, 56, 202;
   --ion-color-primary-contrast: #ffffff;
@@ -21,11 +18,43 @@
   --ion-color-primary-shade: #3b31b2;
   --ion-color-primary-tint: #564cd0;
 
-  /* Reading surface for script text. */
-  --osvald-script-font-size: 1.05rem;
-  --osvald-script-line-height: 1.6;
+  /* Warning = the cue: the line an actor has to answer. Amber stays readable
+   * against both the light and the dark surface. */
+  --ion-color-warning: #d97706;
+  --ion-color-warning-rgb: 217, 119, 6;
+  --ion-color-warning-contrast: #1f1500;
+  --ion-color-warning-contrast-rgb: 31, 21, 0;
+  --ion-color-warning-shade: #bf6905;
+  --ion-color-warning-tint: #fde8c8;
+
+  /* Reading surface for script text: a serif at a comfortable measure, since
+   * scripts are read in long stretches. */
+  --osvald-script-font-family: Georgia, 'Times New Roman', serif;
+  --osvald-script-font-size: 1.1rem;
+  --osvald-script-line-height: 1.65;
   --osvald-cue-color: var(--ion-color-warning);
 
   --ion-background-color: #fafafa;
   --ion-background-color-rgb: 250, 250, 250;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ion-color-primary: #8b85f0;
+    --ion-color-primary-rgb: 139, 133, 240;
+    --ion-color-primary-contrast: #0f0e2a;
+    --ion-color-primary-contrast-rgb: 15, 14, 42;
+    --ion-color-primary-shade: #7a75d3;
+    --ion-color-primary-tint: #968ff2;
+
+    --ion-color-warning: #fbbf24;
+    --ion-color-warning-rgb: 251, 191, 36;
+    --ion-color-warning-contrast: #1f1500;
+    --ion-color-warning-contrast-rgb: 31, 21, 0;
+    --ion-color-warning-shade: #dda820;
+    --ion-color-warning-tint: #fde8c8;
+
+    --ion-background-color: #121214;
+    --ion-background-color-rgb: 18, 18, 20;
+  }
 }

@@ -15,7 +15,7 @@ import '@ionic/vue/css/flex-utils.css';
 import '@ionic/vue/css/display.css';
 // Follows the OS light/dark preference. Use dark.always.css to force dark.
 import '@ionic/vue/css/palettes/dark.system.css';
-// App theme tokens (see the file for the TODO on the real palette).
+// App theme tokens.
 import './theme/variables.css';
 
 import App from './App.vue';

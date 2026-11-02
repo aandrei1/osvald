@@ -94,7 +94,9 @@ const isDirection = computed(() => props.line.type === 'direction');
 
 .line__text {
   display: block;
-  line-height: 1.5;
+  font-family: var(--osvald-script-font-family);
+  font-size: var(--osvald-script-font-size);
+  line-height: var(--osvald-script-line-height);
 }
 
 .line__direction {
