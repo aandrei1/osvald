@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help install build dev dev-backend dev-frontend dev-worker \
+.PHONY: help install build dev deploy dev-backend dev-frontend dev-worker \
 	lint lint-fix format format-check typecheck \
 	test test-watch test-python coverage \
 	db-generate db-migrate db-studio db-seed \
@@ -17,6 +17,10 @@ build: ## Build pentru toate pachetele (turbo)
 
 dev: ## Pornește toate serviciile în mod dev
 	pnpm dev
+
+deploy: ## Pornește tot: stack Docker (cu worker) + frontend dev
+	docker compose --profile worker up -d --build
+	pnpm dev:frontend
 
 dev-backend: ## Pornește doar backend-ul în mod dev
 	pnpm dev:backend
