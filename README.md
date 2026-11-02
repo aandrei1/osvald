@@ -93,7 +93,7 @@ pnpm docker:up                  # postgres (5433), redis (6379), backend (3000),
 cp packages/backend/.env.example packages/backend/.env
 cp packages/frontend/.env.example packages/frontend/.env
 pnpm db:migrate                 # create the tables
-pnpm db:seed                    # import codPython/avarul.txt → 3 ready-to-rehearse plays
+pnpm db:seed                    # import samples/avarul.txt → 3 ready-to-rehearse plays
 
 pnpm dev:worker                 # the parsing worker (needed for uploads)
 pnpm dev:frontend               # http://localhost:5173
@@ -113,7 +113,7 @@ screen. With the Compose stack running you should see `status: "ok"` and
 ### Trying the upload path
 
 `samples/avarul-excerpt.pdf` is a small digital PDF that exercises the whole
-pipeline in a second or two. `codPython/avarul.pdf` is a 68 MB scan — larger
+pipeline in a second or two. `samples/avarul.pdf` (git-ignored, local only) is a 68 MB scan — larger
 than `UPLOAD_MAX_BYTES` and only readable with the OCR build (see §5), which is
 exactly why the seed importer exists.
 
@@ -197,12 +197,9 @@ WITH_PADDLE=true docker compose build ocr-service && docker compose up -d ocr-se
 build is running. Without it, a page with no text layer comes back as `skipped`
 and the job fails with an explanation rather than an empty script.
 
-The recognition and reading-order logic is the same as the standalone
-`codPython/script.py` this was derived from.
-
 ### Seeding
 
-`codPython/avarul.txt` is the OCR output of a 286-page scanned volume holding
+`samples/avarul.txt` is the OCR output of a 286-page scanned volume holding
 three plays. `pnpm db:seed` splits it into one script per play and runs it
 through the same parser and persistence path an upload uses — only the
 extraction step is skipped. It is idempotent on the account, and

@@ -46,3 +46,6 @@ packages/frontend/android/local.properties
 # Generated migrations are committed on purpose; uploads are not.
 packages/backend/uploads/*
 !packages/backend/uploads/.gitkeep
+
+# 68 MB scan, kept locally only
+samples/avarul.pdf

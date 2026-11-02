@@ -15,7 +15,7 @@ import { upsertUser } from '../services/user.service.js';
 /**
  * Imports already-extracted script text straight into the database.
  *
- * Why this exists: `codPython/avarul.txt` is the OCR output of a 286-page
+ * Why this exists: `samples/avarul.txt` is the OCR output of a 286-page
  * scanned volume. Re-running that OCR takes many minutes and the source PDF is
  * larger than the upload limit, so the demo library would otherwise be empty
  * until someone waited out a full parse. This skips the extraction step only —
@@ -28,7 +28,7 @@ import { upsertUser } from '../services/user.service.js';
 
 /** `src/scripts` → repo root. */
 const REPO_ROOT = resolve(import.meta.dirname, '../../../..');
-const DEFAULT_TEXT_FILE = 'codPython/avarul.txt';
+const DEFAULT_TEXT_FILE = 'samples/avarul.txt';
 const DEMO_EMAIL = 'demo@osvald.app';
 const DEMO_PASSWORD = 'osvald-demo-2026';
 
@@ -56,7 +56,7 @@ function readOptions(): SeedOptions {
     allowPositionals: false,
   });
 
-  // The default is relative to the repo root, which is where `codPython` lives
+  // The default is relative to the repo root, which is where `samples` lives
   // regardless of the package the command was run from. An explicit `--file` is
   // whatever the caller typed, so it resolves against their working directory.
   const label = values.file ?? DEFAULT_TEXT_FILE;
