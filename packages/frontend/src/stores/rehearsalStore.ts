@@ -1,6 +1,4 @@
 import {
-  detectLanguage,
-  detectLanguageOfLines,
   type Character,
   type Line,
   type SceneWithLines,
@@ -9,15 +7,15 @@ import {
 import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
 
+import { buildCue } from '@/lib/cue';
+import { buildCharacterNames, countLinesByCharacter } from '@/lib/script';
 import { toErrorMessage } from '@/services/api';
+import { getSpeechService, voicesForLanguage, type SpeechVoice } from '@/services/speech';
 import {
-  assignVoices,
-  getSpeechService,
-  pickVoiceForLanguage,
-  speechTagFor,
-  voicesForLanguage,
-  type SpeechVoice,
-} from '@/services/speech';
+  assignVoicesForNewCharacters,
+  detectScriptLanguage,
+  voiceForLine,
+} from '@/services/voice-casting';
 import { useScriptStore } from '@/stores/scriptStore';
 
 /**
@@ -29,37 +27,21 @@ import { useScriptStore } from '@/stores/scriptStore';
  * whole point, because it is where the actor practises. The line stays hidden
  * (only a short cue is shown) until they ask for it, then they tap to continue.
  *
+ * A rehearsal covers either the whole script or a single scene (`setScope`).
+ * Both are real working modes: an actor drills tomorrow's scene over and over,
+ * then runs the full script to find out whether it holds together.
+ *
  * All speech goes through the `SpeechService` interface, so the native build can
  * swap the engine without touching this file.
  */
-
-/** Most words of the actor's own line to show as a cue. */
-const MAX_CUE_WORDS = 4;
-
-/**
- * The opening words of a line, enough to recognise it but not to read it off.
- *
- * The cap scales with the line: a fixed four words would hand back a short line
- * in full, which is exactly what the actor is supposed to supply from memory.
- */
-export function buildCue(text: string): string {
-  const words = text.split(/\s+/).filter((word) => word.length > 0);
-
-  if (words.length === 0) {
-    return '';
-  }
-
-  const count = Math.max(1, Math.min(MAX_CUE_WORDS, Math.ceil(words.length / 3)));
-  const head = words.slice(0, count).join(' ');
-
-  return words.length > count ? `${head}…` : head;
-}
 
 export const useRehearsalStore = defineStore('rehearsal', () => {
   const scriptStore = useScriptStore();
   const speech = getSpeechService();
 
   const myCharacterId = ref<string | null>(null);
+  /** Scene the rehearsal is confined to; `null` runs the whole script. */
+  const scopeSceneId = ref<string | null>(null);
   const sceneIndex = ref(0);
   const lineIndex = ref(0);
 
@@ -108,7 +90,35 @@ export const useRehearsalStore = defineStore('rehearsal', () => {
   /* Derived view of the script                                             */
   /* ---------------------------------------------------------------------- */
 
-  const scenes = computed<SceneWithLines[]>(() => scriptStore.currentScript?.scenes ?? []);
+  /** Every scene in the open script, regardless of what is being rehearsed. */
+  const allScenes = computed<SceneWithLines[]>(() => scriptStore.currentScript?.scenes ?? []);
+
+  /**
+   * The scene the rehearsal is pinned to, or `null` for the whole script.
+   *
+   * An id that no longer resolves — a stale link, or a script reparsed into
+   * different scenes — falls back to the whole script rather than leaving the
+   * actor on an empty page.
+   */
+  const scopedScene = computed<SceneWithLines | null>(() =>
+    scopeSceneId.value === null
+      ? null
+      : (allScenes.value.find((scene) => scene.id === scopeSceneId.value) ?? null),
+  );
+
+  const isSceneScoped = computed(() => scopedScene.value !== null);
+
+  /**
+   * The scenes this rehearsal runs over.
+   *
+   * Scoping narrows this list instead of being checked at every use site, so
+   * the transport, the progress bar and `hasNextScene` confine themselves to
+   * the chosen scene without knowing that scoping exists.
+   */
+  const scenes = computed<SceneWithLines[]>(() =>
+    scopedScene.value === null ? allScenes.value : [scopedScene.value],
+  );
+
   const characters = computed<Character[]>(() => scriptStore.currentScript?.characters ?? []);
 
   const currentScene = computed<SceneWithLines | null>(
@@ -121,23 +131,24 @@ export const useRehearsalStore = defineStore('rehearsal', () => {
     () => characters.value.find((character) => character.id === myCharacterId.value) ?? null,
   );
 
-  const characterNamesById = computed<Record<string, string>>(() =>
-    Object.fromEntries(characters.value.map((character) => [character.id, character.name])),
-  );
+  const characterNamesById = computed(() => buildCharacterNames(characters.value));
 
   /** Line counts per character, so the cast picker can show role sizes. */
-  const lineCountsByCharacterId = computed<Record<string, number>>(() => {
-    const counts: Record<string, number> = {};
+  const lineCountsByCharacterId = computed(() => countLinesByCharacter(scenes.value));
 
-    for (const scene of scenes.value) {
-      for (const line of scene.lines) {
-        if (line.characterId !== null) {
-          counts[line.characterId] = (counts[line.characterId] ?? 0) + 1;
-        }
-      }
-    }
+  /**
+   * The roles worth offering, counted over what is being rehearsed.
+   *
+   * One scene rarely uses the whole cast, and a character who says nothing in
+   * it is a dead end: picking it leaves the actor with no line to practise. The
+   * full cast is kept when the narrowing finds nobody, so a script whose lines
+   * carry no character ids still yields a usable picker.
+   */
+  const cast = computed<Character[]>(() => {
+    const counts = lineCountsByCharacterId.value;
+    const speaking = characters.value.filter((character) => (counts[character.id] ?? 0) > 0);
 
-    return counts;
+    return speaking.length > 0 ? speaking : characters.value;
   });
 
   function isMine(line: Line | null): boolean {
@@ -165,28 +176,7 @@ export const useRehearsalStore = defineStore('rehearsal', () => {
   /* Language                                                               */
   /* ---------------------------------------------------------------------- */
 
-  /**
-   * Lines sampled to decide the script's language.
-   *
-   * A few dozen are plenty — detection is a sum of stopword hits, and reading
-   * a full-length play on every change would be wasted work.
-   */
-  const LANGUAGE_SAMPLE_LINES = 80;
-
-  const detectedLanguage = computed<SupportedLanguage>(() => {
-    const sample: string[] = [];
-
-    for (const scene of scenes.value) {
-      for (const line of scene.lines) {
-        sample.push(line.text);
-        if (sample.length >= LANGUAGE_SAMPLE_LINES) {
-          return detectLanguageOfLines(sample);
-        }
-      }
-    }
-
-    return detectLanguageOfLines(sample);
-  });
+  const detectedLanguage = computed<SupportedLanguage>(() => detectScriptLanguage(scenes.value));
 
   /** The language lines are spoken in: the actor's choice, else the detection. */
   const language = computed<SupportedLanguage>(
@@ -207,17 +197,6 @@ export const useRehearsalStore = defineStore('rehearsal', () => {
     () => voices.value.length > 0 && voicesForCurrentLanguage.value.length === 0,
   );
 
-  /**
-   * Language of one line, falling back to the script's.
-   *
-   * Per line rather than per script because mixed scripts are normal — an
-   * English song inside a Romanian play, a quoted foreign phrase — and a line
-   * read by the wrong engine is unintelligible even when the rest is fine.
-   */
-  function languageOf(line: Line): SupportedLanguage {
-    return detectLanguage(line.text, language.value);
-  }
-
   /** Records whether the engine is currently falling back to local voices. */
   function syncDegraded(): void {
     isSpeechDegraded.value = speech.isDegraded ?? false;
@@ -225,18 +204,11 @@ export const useRehearsalStore = defineStore('rehearsal', () => {
 
   /** The voice and tag to speak `line` with. */
   function voicingFor(line: Line): { voiceId: string | null; lang: string } {
-    const lineLanguage = languageOf(line);
-    const assigned =
-      line.characterId === null ? undefined : voiceByCharacterId.value[line.characterId];
-
-    // The character's voice only applies while the line is in the language it
-    // was chosen for; otherwise fall back to any voice for the line's language.
-    const voiceId =
-      lineLanguage === language.value && assigned !== undefined
-        ? assigned
-        : (pickVoiceForLanguage(voices.value, lineLanguage)?.id ?? null);
-
-    return { voiceId, lang: speechTagFor(lineLanguage) };
+    return voiceForLine(line, {
+      scriptLanguage: language.value,
+      voices: voices.value,
+      voiceByCharacterId: voiceByCharacterId.value,
+    });
   }
 
   /* ---------------------------------------------------------------------- */
@@ -263,15 +235,15 @@ export const useRehearsalStore = defineStore('rehearsal', () => {
 
   /** Gives a voice to every character that has none, in the script's language. */
   function assignMissingVoices(): void {
-    const unassigned = characters.value
-      .map((character) => character.id)
-      .filter((id) => voiceByCharacterId.value[id] === undefined);
+    const assignments = assignVoicesForNewCharacters(
+      characters.value,
+      voices.value,
+      language.value,
+      voiceByCharacterId.value,
+    );
 
-    if (unassigned.length > 0) {
-      voiceByCharacterId.value = {
-        ...voiceByCharacterId.value,
-        ...assignVoices(unassigned, voices.value, language.value),
-      };
+    if (Object.keys(assignments).length > 0) {
+      voiceByCharacterId.value = { ...voiceByCharacterId.value, ...assignments };
     }
   }
 
@@ -337,6 +309,24 @@ export const useRehearsalStore = defineStore('rehearsal', () => {
   function selectScene(index: number): void {
     pause();
     sceneIndex.value = Math.min(Math.max(index, 0), Math.max(scenes.value.length - 1, 0));
+    lineIndex.value = 0;
+    isRevealed.value = false;
+  }
+
+  /**
+   * Confines the rehearsal to one scene, or opens it up to the whole script.
+   *
+   * The two modes differ in more than range. Running the whole script has to
+   * roll from one scene into the next by itself, or the actor is tapping play
+   * every few minutes; a single scene is being drilled, and stopping at its end
+   * is what lets them run it again. So the scope sets `autoAdvanceScene` rather
+   * than leaving it to be toggled by hand — it can still be overridden after.
+   */
+  function setScope(sceneId: string | null): void {
+    pause();
+    scopeSceneId.value = sceneId;
+    autoAdvanceScene.value = sceneId === null;
+    sceneIndex.value = 0;
     lineIndex.value = 0;
     isRevealed.value = false;
   }
@@ -541,6 +531,7 @@ export const useRehearsalStore = defineStore('rehearsal', () => {
   function reset(): void {
     pause();
     myCharacterId.value = null;
+    scopeSceneId.value = null;
     sceneIndex.value = 0;
     lineIndex.value = 0;
     isRevealed.value = false;
@@ -564,6 +555,7 @@ export const useRehearsalStore = defineStore('rehearsal', () => {
   return {
     // state
     myCharacterId,
+    scopeSceneId,
     sceneIndex,
     lineIndex,
     isRunning,
@@ -579,8 +571,12 @@ export const useRehearsalStore = defineStore('rehearsal', () => {
     autoAdvanceScene,
     error,
     // derived
+    allScenes,
     scenes,
+    scopedScene,
+    isSceneScoped,
     characters,
+    cast,
     currentScene,
     lines,
     currentLine,
@@ -602,6 +598,7 @@ export const useRehearsalStore = defineStore('rehearsal', () => {
     setVoiceForCharacter,
     chooseCharacter,
     jumpToMyFirstScene,
+    setScope,
     selectScene,
     goToLine,
     nextLine,

@@ -12,7 +12,6 @@ import {
   IonItem,
   IonLabel,
   IonList,
-  IonListHeader,
   IonNote,
   IonPage,
   IonProgressBar,
@@ -57,8 +56,19 @@ onMounted(() => {
   scriptStore.watchParsing(props.id);
 });
 
-function startRehearsal(): void {
-  void router.push({ name: 'rehearsal', params: { id: props.id } });
+/**
+ * Opens the rehearsal view, either over the whole script or over one scene.
+ *
+ * The scene travels in the query rather than the path: it is a mode the same
+ * rehearsal runs in, and keeping one route means a shared link, a reload or a
+ * back-navigation all land in the same place.
+ */
+function startRehearsal(sceneId?: string): void {
+  void router.push({
+    name: 'rehearsal',
+    params: { id: props.id },
+    query: sceneId === undefined ? {} : { scene: sceneId },
+  });
 }
 
 async function reparse(): Promise<void> {
@@ -167,9 +177,20 @@ async function confirmDelete(): Promise<void> {
             </div>
           </section>
 
+          <section class="scenes-head">
+            <h3>Scenes</h3>
+            <ion-note>Tap one to rehearse it on its own.</ion-note>
+          </section>
+
           <ion-list :inset="true">
-            <ion-list-header>Scenes</ion-list-header>
-            <ion-item v-for="scene in script.scenes" :key="scene.id" lines="inset">
+            <ion-item
+              v-for="scene in script.scenes"
+              :key="scene.id"
+              button
+              :detail="false"
+              lines="inset"
+              @click="startRehearsal(scene.id)"
+            >
               <ion-label class="scene">
                 <h3>{{ scene.number }}</h3>
                 <p v-if="scene.title !== scene.number">{{ scene.title }}</p>
@@ -183,6 +204,13 @@ async function confirmDelete(): Promise<void> {
                   </template>
                 </ion-note>
               </ion-label>
+              <ion-icon
+                slot="end"
+                :icon="playCircleOutline"
+                color="primary"
+                aria-hidden="true"
+                class="scene__play"
+              />
             </ion-item>
           </ion-list>
 
@@ -203,9 +231,9 @@ async function confirmDelete(): Promise<void> {
 
     <ion-footer v-if="isReady">
       <ion-toolbar>
-        <ion-button expand="block" class="ion-margin-horizontal" @click="startRehearsal">
+        <ion-button expand="block" class="ion-margin-horizontal" @click="startRehearsal()">
           <ion-icon slot="start" :icon="playCircleOutline" />
-          Rehearse
+          Rehearse the whole script
         </ion-button>
       </ion-toolbar>
     </ion-footer>
@@ -269,8 +297,28 @@ async function confirmDelete(): Promise<void> {
   gap: 0.25rem;
 }
 
+.scenes-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  padding: 0.5rem 1.5rem 0;
+}
+
+.scenes-head h3 {
+  margin: 0;
+  font-size: 0.8125rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ion-color-medium);
+}
+
 .scene h3 {
   font-weight: 600;
+}
+
+.scene__play {
+  font-size: 1.375rem;
 }
 
 .secondary {

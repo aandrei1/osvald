@@ -71,6 +71,20 @@ Every `await speech.speak()` is a point at which the user may have paused or
 jumped elsewhere, so each loop captures a token and exits when it no longer
 matches. That is what keeps a stale loop from resuming over a new one.
 
+### Scope: one scene or the whole script
+
+A rehearsal covers either the whole script or a single scene. The script detail
+page offers both — tapping a scene opens `/scripts/:id/rehearse?scene=<sceneId>`,
+the footer button opens the same route without the query.
+
+`setScope()` narrows the store's `scenes` to the chosen one, so the transport,
+the progress bar and `hasNextScene` confine themselves to it without knowing
+scoping exists. The scope also decides `autoAdvanceScene`: running the whole
+script has to roll from scene to scene by itself, while a single scene is being
+drilled and must stop at its end so it can be taken again. The scene id lives
+in the URL rather than in component state, so a reload or a shared link resumes
+the same drill.
+
 ## Speech abstraction
 
 `services/speech.ts` defines the contract (`isSupported`, `listVoices`, `speak`,
@@ -109,6 +123,7 @@ pnpm --filter @osvald/frontend test
 pnpm --filter @osvald/frontend test:watch
 ```
 
-`happy-dom` (no browser) covers the speech helpers, `buildCue` and the Pinia
-stores. The API client is mocked, so the tests describe the stores' state
-machine rather than HTTP.
+`happy-dom` (no browser) covers the pure helpers (`lib/cue`, `lib/script`,
+`services/speech`, `services/voice-casting`) and the Pinia stores. The API
+client is mocked, so the store tests describe the state machine rather than
+HTTP.

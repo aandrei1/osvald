@@ -34,9 +34,11 @@ import {
 } from 'ionicons/icons';
 import { LANGUAGE_LABELS, supportedLanguageSchema, type SupportedLanguage } from '@osvald/shared';
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 
 import LineRow from '@/components/LineRow.vue';
-import { buildCue, useRehearsalStore } from '@/stores/rehearsalStore';
+import { buildCue } from '@/lib/cue';
+import { useRehearsalStore } from '@/stores/rehearsalStore';
 import { useScriptStore } from '@/stores/scriptStore';
 
 /**
@@ -46,9 +48,15 @@ import { useScriptStore } from '@/stores/scriptStore';
  * the rest meaningful. Then the scene runs: other characters are read aloud,
  * and on the actor's own lines everything stops, the text stays hidden behind a
  * short cue, and they tap when they have delivered it.
+ *
+ * A `?scene=<id>` query narrows the rehearsal to that one scene. It lives in
+ * the URL rather than in component state so a reload, a back-navigation or a
+ * shared link all resume the same drill.
  */
 const props = defineProps<{ id: string }>();
 
+const route = useRoute();
+const router = useRouter();
 const scriptStore = useScriptStore();
 const rehearsal = useRehearsalStore();
 
@@ -58,11 +66,27 @@ const transcript = ref<HTMLElement | null>(null);
 const script = computed(() => scriptStore.currentScript);
 const hasChosenRole = computed(() => rehearsal.myCharacterId !== null);
 
+/** The scene asked for in the URL, if any. */
+const scopedSceneId = computed(() =>
+  typeof route.query.scene === 'string' && route.query.scene.length > 0 ? route.query.scene : null,
+);
+
 onMounted(async () => {
   rehearsal.reset();
+  rehearsal.setScope(scopedSceneId.value);
   await scriptStore.fetchScriptDetail(props.id);
   await rehearsal.loadVoices();
 });
+
+// The URL is the source of truth for the scope, so widening or narrowing is a
+// navigation and the store follows it.
+watch(scopedSceneId, (sceneId) => {
+  rehearsal.setScope(sceneId);
+});
+
+function rehearseWholeScript(): void {
+  void router.replace({ name: 'rehearsal', params: { id: props.id }, query: {} });
+}
 
 // Leaving the page must silence the engine; speech otherwise keeps going.
 onBeforeUnmount(() => {
@@ -120,6 +144,13 @@ const sceneLabel = computed(() => {
   }
   return scene.title === scene.number ? scene.number : `${scene.number} — ${scene.title}`;
 });
+
+/** `Scene 3 of 12`, so a whole-script run says how far along it is. */
+const scenePosition = computed(() =>
+  rehearsal.isSceneScoped || rehearsal.scenes.length < 2
+    ? null
+    : `${rehearsal.sceneIndex + 1} of ${rehearsal.scenes.length}`,
+);
 </script>
 
 <template>
@@ -151,11 +182,17 @@ const sceneLabel = computed(() => {
             Osvald reads everyone else aloud and stops on your lines, showing only the first few
             words as a cue.
           </p>
+          <p v-if="rehearsal.isSceneScoped" class="intro__scope">
+            Rehearsing <strong>{{ sceneLabel }}</strong> on its own.
+            <ion-button fill="clear" size="small" @click="rehearseWholeScript">
+              whole script instead
+            </ion-button>
+          </p>
         </div>
 
         <ion-list :inset="true">
           <ion-item
-            v-for="character in rehearsal.characters"
+            v-for="character in rehearsal.cast"
             :key="character.id"
             button
             :detail="true"
@@ -171,7 +208,7 @@ const sceneLabel = computed(() => {
           </ion-item>
         </ion-list>
 
-        <ion-note v-if="rehearsal.characters.length === 0" class="pad">
+        <ion-note v-if="rehearsal.cast.length === 0" class="pad">
           This script has no characters yet — it may still be parsing.
         </ion-note>
 
@@ -186,7 +223,21 @@ const sceneLabel = computed(() => {
       <!-- Phase 2: run the scene. -->
       <template v-else>
         <div class="scene-bar">
+          <!--
+            Scoped to one scene there is nothing to pick, so the picker gives
+            way to the way out of the scope — otherwise the only route back to
+            the full script is the browser's back button.
+          -->
+          <div v-if="rehearsal.isSceneScoped" class="scene-bar__scope">
+            <ion-note>one scene</ion-note>
+            <strong>{{ sceneLabel }}</strong>
+            <ion-button fill="clear" size="small" @click="rehearseWholeScript">
+              whole script
+            </ion-button>
+          </div>
+
           <ion-select
+            v-else
             :value="rehearsal.sceneIndex"
             interface="popover"
             label="Scene"
@@ -305,7 +356,10 @@ const sceneLabel = computed(() => {
             <ion-icon slot="icon-only" :icon="chevronForwardOutline" />
           </ion-button>
         </div>
-        <ion-note class="scene-caption">{{ sceneLabel }}</ion-note>
+        <ion-note class="scene-caption">
+          {{ sceneLabel }}
+          <template v-if="scenePosition !== null"> · scene {{ scenePosition }}</template>
+        </ion-note>
       </ion-toolbar>
     </ion-footer>
 
@@ -339,11 +393,12 @@ const sceneLabel = computed(() => {
             </ion-toggle>
           </ion-item>
 
-          <ion-item>
+          <!-- Nothing to continue into while the rehearsal is one scene wide. -->
+          <ion-item v-if="!rehearsal.isSceneScoped">
             <ion-toggle v-model="rehearsal.autoAdvanceScene">
               <ion-label>
                 <h3>Continue into the next scene</h3>
-                <p>Run the whole act without stopping.</p>
+                <p>Run the whole script without stopping.</p>
               </ion-label>
             </ion-toggle>
           </ion-item>
@@ -408,7 +463,7 @@ const sceneLabel = computed(() => {
         </ion-note>
 
         <ion-list v-else>
-          <ion-item v-for="character in rehearsal.characters" :key="character.id">
+          <ion-item v-for="character in rehearsal.cast" :key="character.id">
             <ion-select
               :value="rehearsal.voiceByCharacterId[character.id]"
               :label="character.name"
@@ -456,6 +511,18 @@ const sceneLabel = computed(() => {
   line-height: 1.5;
 }
 
+.intro__scope {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  flex-wrap: wrap;
+  margin-top: 0.5rem;
+}
+
+.intro__scope strong {
+  color: var(--ion-text-color);
+}
+
 .scene-bar {
   display: flex;
   align-items: flex-end;
@@ -464,12 +531,20 @@ const sceneLabel = computed(() => {
   padding: 0.5rem 1.25rem;
 }
 
+.scene-bar__scope,
 .scene-bar__role {
   display: flex;
   align-items: center;
   gap: 0.375rem;
   font-size: 0.875rem;
   white-space: nowrap;
+}
+
+/* A scene title can be long; it wraps rather than pushing the row wider. */
+.scene-bar__scope {
+  flex: 1;
+  min-width: 0;
+  white-space: normal;
 }
 
 .transcript {

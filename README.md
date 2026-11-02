@@ -286,8 +286,11 @@ pnpm --filter @osvald/backend test:watch
   accepts `{ db, redis, queues }` for exactly this. If Postgres is unreachable
   the integration suites skip and the unit suite still runs; point them
   elsewhere with `TEST_DATABASE_URL`.
-- **`packages/frontend`** — `happy-dom`, no browser: speech helpers, `buildCue`
-  and the Pinia stores (`authStore`, `scriptStore`), with the API client mocked.
+- **`packages/frontend`** — `happy-dom`, no browser: the pure helpers
+  (`lib/cue`, `lib/script`, `services/speech`, `services/voice-casting`) and the
+  Pinia stores (`authStore`, `scriptStore`), with the API client mocked. The
+  voice-casting rules live outside the store precisely so they can be tested
+  without a Pinia instance or a speech engine.
 
 ### Python — pytest
 
