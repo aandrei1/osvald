@@ -18,6 +18,8 @@ export default defineConfig({
   server: {
     host: true,
     port: Number(process.env.VITE_PORT) || 5173,
+    // Another port would be missing from the backend's CORS_ORIGIN.
+    strictPort: true,
   },
 
   preview: {
