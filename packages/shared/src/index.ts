@@ -14,6 +14,7 @@ export * from './language.js';
 export * from './line.js';
 export * from './character.js';
 export * from './scene.js';
+export * from './script-stage.js';
 export * from './script.js';
 export * from './tts.js';
 export * from './user.js';
