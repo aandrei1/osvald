@@ -1,6 +1,6 @@
 # Plan: fluxul de producție al unui script (`ScriptProductionFlow`)
 
-Stare: **Etapele 0 și 1 făcute** (2026-11-03). Urmează **Etapa 2**.
+Stare: **Etapele 0, 1 și 2 făcute** (2026-11-03). Urmează **Etapa 3**.
 Decis cu Andrei pe 2026-11-03. Orice abatere de la deciziile de mai jos se discută înainte de implementare.
 
 ## De ce
@@ -223,6 +223,21 @@ Fiecare etapă se încheie cu aplicația funcțională, testele verzi și typech
 - `EmailSender` cu un adaptor SMTP (nodemailer) și Mailpit în `docker-compose`;
 - în frontend: alegerea workspace-ului, lista de membri, invitarea și acceptarea invitației;
 - teste: matricea de permisiuni, invariantul „un singur editor”, invitații expirate sau refolosite.
+
+**Făcut 2026-11-03.** Decizii luate cu Andrei la pornire și detalii de implementare:
+
+- **Acceptarea cere contul cu exact adresa invitată.** Un link trimis mai departe nu dă acces altcuiva (403 cu adresa corectă în mesaj). Linkul merge o singură dată: o invitație acceptată, anulată sau expirată primește 409. Rândul invitației e blocat la acceptare, deci două click-uri simultane nu reușesc amândouă.
+- **E-mailul pleacă direct din request** (nodemailer, timeout-uri scurte), nu printr-un job BullMQ. Dacă SMTP pică, invitația rămâne salvată, răspunsul spune `emailSent: false`, iar editorul are „Resend”. Tokenul nu se stochează (doar SHA-256), deci retrimiterea emite un link nou și îl anulează pe cel vechi. O invitație nouă către aceeași adresă o anulează pe cea deschisă (index unic parțial).
+- **Migrarea `0005` șterge scripturile anonime** (`user_id IS NULL`). Nu exista niciunul, iar PDF-urile lor ar fi rămas în `UPLOAD_DIR`. Verificată pe o copie a bazei de dev: fiecare utilizator are un workspace personal („<nume>'s workspace”) în care e editor, iar scripturile au trecut în workspace-ul celui care le-a încărcat. `scripts.user_id` rămâne ca „cine a încărcat”.
+- **Operații pe membri:** creare workspace (oricine, devine editor), redenumire, scoaterea unui membru, anularea unei invitații și transferul rolului de editor. **Membrul nu poate pleca singur** (Andrei n-a inclus asta acum). Editorul nu se poate scoate pe sine, doar transferă rolul.
+- **Un singur editor:** index unic parțial `WHERE role = 'editor'`. „Cel puțin unul” e garantat de cod: editorul nu poate fi scos. Transferul blochează rândul workspace-ului, verifică rolul în tranzacție, retrogradează apoi promovează. Două transferuri simultane: unul trece, celălalt primește 403.
+- **Permisiunile:** matricea `ROLE_PERMISSIONS` și `can()` sunt în `shared/src/workspace.ts`. Backend-ul o aplică prin `flows/authorization.ts`: cine nu e membru primește 404 (ca un id inexistent), un membru fără permisiune primește 403. Rolul se citește mereu din baza de date, nu din token.
+- **`confirmGender` e mutat acum în `ScriptProductionFlow`** (doar autorizarea `script:edit`), ca PATCH-ul de gen să treacă prin `authorize`. Limitarea la `in_review` și `ready` rămâne pentru Etapa 3.
+- **Rute:** `GET /scripts?workspaceId=` (obligatoriu), `POST /scripts/upload?workspaceId=`, `/workspaces` (listă, creare, redenumire, membri, `POST /:id/editor`, invitații cu `resend` și anulare) și `/invitations/:token` (previzualizare publică, `POST …/accept` autentificat). Un upload refuzat își șterge fișierul.
+- **Configurare nouă:** `APP_BASE_URL` (linkul din e-mail), `SMTP_URL`, `MAIL_FROM` și `INVITATION_TTL_HOURS` (implicit 168). Mailpit e în `docker-compose` (`axllent/mailpit:v1`, SMTP 1025, inbox pe http://localhost:8025).
+- **Frontend:** `workspaceStore` (alegerea salvată în `localStorage`, `canIn`/`canHere` după aceeași matrice), comutator de workspace și „New workspace” pe Home, pagina `/workspaces/:id` (membri, invitare, invitații deschise, „Make editor”, „Remove”) și pagina publică `/invitations/:token`, care trimite la login cu adresa precompletată. Membrii nu văd upload, reparse, delete, iar genul e dezactivat în repetiție. Vocile locale de repetiție rămân la alegerea fiecăruia.
+
+**De făcut de Andrei:** reconstruiește imaginile `backend` și `worker`, pornește `mailpit` și rulează `pnpm db:migrate` pe baza de dev. Ecranele noi n-au fost încercate manual în browser.
 
 ### Etapa 3: review
 
