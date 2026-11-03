@@ -12,6 +12,8 @@
 #   - ocr-service     -> packages/ocr-service/Dockerfile (Python 3.12 + FastAPI)
 #   - tts-service     -> packages/tts-service/Dockerfile (Python 3.12 + FastAPI)
 #   - postgres/redis  -> upstream images, nothing to build
+#   - mailpit         -> catches every e-mail the backend sends (invitations);
+#                        inbox at http://localhost:8025
 #   - frontend        -> no image: Vite runs on the host, iOS/Android via Capacitor
 #
 # Host ports were picked to avoid clashing with already-running local services
@@ -73,6 +75,9 @@ services:
       JWT_SECRET: ${JWT_SECRET:-dev-only-secret-change-me-min-32-characters-long}
       JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-1h}
       CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:5173,http://localhost:4173,http://localhost,capacitor://localhost}
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:5173}
+      SMTP_URL: ${SMTP_URL:-smtp://mailpit:1025}
+      MAIL_FROM: ${MAIL_FROM:-Osvald <no-reply@osvald.local>}
       UPLOAD_DIR: /repo/packages/backend/uploads
     # Shared with `worker`, which reads the files this service stores.
     volumes:
@@ -84,6 +89,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      mailpit:
+        condition: service_started
     healthcheck:
       # `localhost` resolves to IPv6 ::1 inside the Alpine image while Node
       # listens on IPv4, so probe 127.0.0.1 explicitly. Node is always present.
@@ -98,6 +105,15 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
+
+  # Development SMTP server: accepts every message and shows it in a web inbox.
+  # Point SMTP_URL at a real server outside development.
+  mailpit:
+    image: axllent/mailpit:v1
+    restart: unless-stopped
+    ports:
+      - '${MAILPIT_SMTP_PORT:-1025}:1025'
+      - '${MAILPIT_UI_PORT:-8025}:8025'
 
   # Optional: the BullMQ consumer for the `script-parsing` queue.
   # Same image as `backend`, different entrypoint.

@@ -35,6 +35,19 @@ const envSchema = z.object({
 
   // HTTP
   CORS_ORIGIN: z.string().min(1).default('http://localhost:5173'),
+  /** Where the app is served; invitation links point here. */
+  APP_BASE_URL: z.url().default('http://localhost:5173'),
+
+  // E-mail (Mailpit in development: SMTP on 1025, inbox on http://localhost:8025)
+  SMTP_URL: z.url().default('smtp://localhost:1025'),
+  MAIL_FROM: z.string().min(3).default('Osvald <no-reply@osvald.local>'),
+
+  // Workspaces
+  INVITATION_TTL_HOURS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(7 * 24),
 
   // PDF uploads
   UPLOAD_DIR: z.string().min(1).default('uploads'),
