@@ -18,9 +18,8 @@ build: ## Build pentru toate pachetele (turbo)
 dev: ## Pornește toate serviciile în mod dev
 	pnpm dev
 
-deploy: ## Pornește tot: stack Docker (cu worker) + frontend dev
-	docker compose --profile worker up -d --build
-	pnpm dev:frontend
+deploy: ## Pornește tot: stack Docker (cu worker + PaddleOCR) + frontend dev
+	./scripts/deploy.sh
 
 dev-backend: ## Pornește doar backend-ul în mod dev
 	pnpm dev:backend
