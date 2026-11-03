@@ -18,6 +18,7 @@ export * from './script-stage.js';
 export * from './script.js';
 export * from './tts.js';
 export * from './user.js';
+export * from './workspace.js';
 export * from './health.js';
 
 /**
