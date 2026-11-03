@@ -2,6 +2,7 @@ import type { Redis } from 'ioredis';
 import { vi, type Mock } from 'vitest';
 
 import type { Clock } from '../../src/ports/clock.js';
+import type { EmailMessage, EmailSender } from '../../src/ports/email-sender.js';
 import type {
   EnqueueOutcome,
   ExtractionJob,
@@ -120,4 +121,38 @@ export function createFakeRedis(options: FakeRedisOptions = {}): Redis {
   };
 
   return fake as unknown as Redis;
+}
+
+/** Records outgoing e-mail instead of sending it; `failNext()` simulates an SMTP outage. */
+export interface FakeEmailSender extends EmailSender {
+  sent: EmailMessage[];
+  failNext(): void;
+}
+
+export function createFakeEmailSender(): FakeEmailSender {
+  const sent: EmailMessage[] = [];
+  let failing = false;
+
+  return {
+    sent,
+    async send(message: EmailMessage): Promise<void> {
+      if (failing) {
+        failing = false;
+        throw new Error('SMTP server unreachable');
+      }
+      sent.push(message);
+    },
+    failNext(): void {
+      failing = true;
+    },
+  };
+}
+
+/** The token at the end of the link in an invitation e-mail. */
+export function invitationTokenFrom(message: EmailMessage | undefined): string {
+  const match = /\/invitations\/([A-Za-z0-9_-]+)/.exec(message?.text ?? '');
+  if (match?.[1] === undefined) {
+    throw new Error('the e-mail carries no invitation link');
+  }
+  return match[1];
 }
