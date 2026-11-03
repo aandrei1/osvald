@@ -11,7 +11,7 @@ import { computed, ref } from 'vue';
 import { api, toErrorMessage, type UploadScriptInput } from '@/services/api';
 
 /**
- * The script library and the currently opened script.
+ * The library of one workspace and the currently opened script.
  *
  * Extraction happens on a queue worker, so an upload returns before there is
  * anything to rehearse. `watchParsing()` exists for that gap: it polls the
@@ -39,13 +39,19 @@ export const useScriptStore = defineStore('script', () => {
 
   /** Timers keyed by script id, so leaving a page can cancel its poll. */
   const pollTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  /** Bumped by every list request, so a slow answer for another workspace is dropped. */
+  let listRequest = 0;
 
-  async function fetchScripts(): Promise<void> {
+  async function fetchScripts(workspaceId: string): Promise<void> {
+    const request = (listRequest += 1);
     isLoading.value = true;
     error.value = null;
 
     try {
-      const response = await api.listScripts();
+      const response = await api.listScripts({ workspaceId });
+      if (request !== listRequest) {
+        return;
+      }
       scripts.value = response.items;
       total.value = response.total;
 
@@ -57,9 +63,13 @@ export const useScriptStore = defineStore('script', () => {
         }
       }
     } catch (caught) {
-      error.value = toErrorMessage(caught);
+      if (request === listRequest) {
+        error.value = toErrorMessage(caught);
+      }
     } finally {
-      isLoading.value = false;
+      if (request === listRequest) {
+        isLoading.value = false;
+      }
     }
   }
 
@@ -278,6 +288,8 @@ export const useScriptStore = defineStore('script', () => {
   }
 
   function clear(): void {
+    listRequest += 1;
+    isLoading.value = false;
     stopWatching();
     scripts.value = [];
     total.value = 0;

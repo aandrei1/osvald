@@ -33,7 +33,8 @@ const auth = useAuthStore();
 type Mode = 'signIn' | 'signUp';
 
 const mode = ref<Mode>('signIn');
-const email = ref('');
+// An invitation link passes the invited address along.
+const email = ref(typeof route.query.email === 'string' ? route.query.email : '');
 const password = ref('');
 const displayName = ref('');
 

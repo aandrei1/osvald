@@ -12,23 +12,27 @@ import {
   IonPage,
   IonRefresher,
   IonRefresherContent,
+  IonSelect,
+  IonSelectOption,
   IonSpinner,
   IonText,
   IonTitle,
   IonToolbar,
+  alertController,
 } from '@ionic/vue';
-import { cloudUploadOutline, logOutOutline } from 'ionicons/icons';
-import { onMounted, ref } from 'vue';
+import { addOutline, cloudUploadOutline, logOutOutline, peopleOutline } from 'ionicons/icons';
+import { computed, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 
 import HealthStatusCard from '@/components/HealthStatusCard.vue';
 import ScriptListItem from '@/components/ScriptListItem.vue';
 import { useAuthStore } from '@/stores/authStore';
 import { useScriptStore } from '@/stores/scriptStore';
+import { useWorkspaceStore } from '@/stores/workspaceStore';
 
 /**
- * The script library: everything the signed-in actor has uploaded, plus the
- * upload entry point.
+ * The library of the current workspace, the switch between workspaces, and,
+ * for the workspace's editor, the upload entry point.
  *
  * A freshly uploaded script is parsed on a queue worker, so the store keeps
  * polling it and the row shows a spinner until it is ready to rehearse.
@@ -36,13 +40,60 @@ import { useScriptStore } from '@/stores/scriptStore';
 const router = useRouter();
 const auth = useAuthStore();
 const scriptStore = useScriptStore();
+const workspaceStore = useWorkspaceStore();
 
 const fileInput = ref<HTMLInputElement | null>(null);
 const showDiagnostics = ref(false);
 
+const canUpload = computed(() => workspaceStore.canHere('script:import'));
+
 onMounted(() => {
-  void scriptStore.fetchScripts();
+  void workspaceStore.ensureLoaded();
 });
+
+// Every switch, including the first choice after loading, reloads the library.
+watch(
+  () => workspaceStore.currentWorkspaceId,
+  (id) => {
+    if (id === null) {
+      scriptStore.clear();
+    } else {
+      void scriptStore.fetchScripts(id);
+    }
+  },
+  { immediate: true },
+);
+
+async function promptNewWorkspace(): Promise<void> {
+  const alert = await alertController.create({
+    header: 'New workspace',
+    message: 'You will be its editor and can invite the cast.',
+    inputs: [{ name: 'name', type: 'text', placeholder: 'e.g. Teatrul Mic — Salem' }],
+    buttons: [
+      { text: 'Cancel', role: 'cancel' },
+      {
+        text: 'Create',
+        handler: (data: { name?: string }) => {
+          const name = data.name?.trim() ?? '';
+          if (name.length === 0) {
+            return false;
+          }
+          void workspaceStore.createWorkspace(name);
+          return true;
+        },
+      },
+    ],
+  });
+
+  await alert.present();
+}
+
+function openPeople(): void {
+  const id = workspaceStore.currentWorkspaceId;
+  if (id !== null) {
+    void router.push({ name: 'workspace', params: { id } });
+  }
+}
 
 function openScript(script: Script): void {
   void router.push({ name: 'script-detail', params: { id: script.id } });
@@ -56,8 +107,10 @@ async function onFileSelected(event: Event): Promise<void> {
   const input = event.target as HTMLInputElement;
   const file = input.files?.[0];
 
-  if (file !== undefined) {
-    const uploaded = await scriptStore.uploadScript({ file });
+  const workspaceId = workspaceStore.currentWorkspaceId;
+
+  if (file !== undefined && workspaceId !== null) {
+    const uploaded = await scriptStore.uploadScript({ workspaceId, file });
     if (uploaded !== null) {
       // Go straight to the detail page: that is where parsing progress shows.
       openScript(uploaded);
@@ -69,7 +122,12 @@ async function onFileSelected(event: Event): Promise<void> {
 }
 
 async function refresh(event?: CustomEvent<unknown>): Promise<void> {
-  await scriptStore.fetchScripts();
+  // The role may have changed (a transfer, a removal) since the list was loaded.
+  await workspaceStore.fetchWorkspaces();
+  const id = workspaceStore.currentWorkspaceId;
+  if (id !== null) {
+    await scriptStore.fetchScripts(id);
+  }
 
   // Ionic's <ion-refresher> needs to be told when to stop spinning.
   const target = event?.target as { complete?: () => Promise<void> } | null | undefined;
@@ -78,6 +136,7 @@ async function refresh(event?: CustomEvent<unknown>): Promise<void> {
 
 function signOut(): void {
   scriptStore.clear();
+  workspaceStore.clear();
   auth.signOut();
   void router.replace({ name: 'login' });
 }
@@ -87,11 +146,49 @@ function signOut(): void {
   <ion-page>
     <ion-header>
       <ion-toolbar>
-        <ion-title>Your scripts</ion-title>
+        <ion-title>Scripts</ion-title>
         <ion-buttons slot="end">
           <ion-button fill="clear" size="small" @click="refresh()">Reload</ion-button>
-          <ion-button fill="clear" size="small" @click="signOut">
+          <ion-button fill="clear" size="small" aria-label="Sign out" @click="signOut">
             <ion-icon slot="icon-only" :icon="logOutOutline" />
+          </ion-button>
+        </ion-buttons>
+      </ion-toolbar>
+      <ion-toolbar>
+        <ion-select
+          class="workspace-select"
+          aria-label="Workspace"
+          interface="popover"
+          :value="workspaceStore.currentWorkspaceId"
+          :placeholder="workspaceStore.isLoading ? 'Loading workspaces…' : 'No workspace'"
+          @ion-change="workspaceStore.select($event.detail.value)"
+        >
+          <ion-select-option
+            v-for="workspace in workspaceStore.workspaces"
+            :key="workspace.id"
+            :value="workspace.id"
+          >
+            {{ workspace.name }}{{ workspace.role === 'editor' ? ' (editor)' : '' }}
+          </ion-select-option>
+        </ion-select>
+        <ion-buttons slot="end">
+          <ion-button
+            fill="clear"
+            size="small"
+            aria-label="Members"
+            :disabled="workspaceStore.currentWorkspace === null"
+            @click="openPeople"
+          >
+            <ion-icon slot="start" :icon="peopleOutline" />
+            {{ workspaceStore.currentWorkspace?.memberCount ?? '' }}
+          </ion-button>
+          <ion-button
+            fill="clear"
+            size="small"
+            aria-label="New workspace"
+            @click="promptNewWorkspace"
+          >
+            <ion-icon slot="icon-only" :icon="addOutline" />
           </ion-button>
         </ion-buttons>
       </ion-toolbar>
@@ -106,13 +203,18 @@ function signOut(): void {
         <ion-spinner name="crescent" />
       </div>
 
-      <div v-else-if="scriptStore.isEmpty" class="empty">
+      <div v-else-if="scriptStore.isEmpty && canUpload" class="empty">
         <h2>No scripts yet</h2>
         <p>
           Upload a PDF of a play. Osvald reads it — using the embedded text where there is one and
           OCR where there is not — then splits it into scenes, characters and lines so you can
           rehearse against the cast.
         </p>
+      </div>
+
+      <div v-else-if="scriptStore.isEmpty" class="empty">
+        <h2>No scripts yet</h2>
+        <p>The editor of this workspace has not uploaded a script yet.</p>
       </div>
 
       <ion-list v-else :inset="true">
@@ -127,6 +229,9 @@ function signOut(): void {
 
       <ion-text v-if="scriptStore.error !== null" color="danger">
         <p class="error">{{ scriptStore.error }}</p>
+      </ion-text>
+      <ion-text v-if="workspaceStore.error !== null" color="danger">
+        <p class="error">{{ workspaceStore.error }}</p>
       </ion-text>
 
       <div class="diagnostics">
@@ -148,6 +253,7 @@ function signOut(): void {
     <ion-footer>
       <ion-toolbar>
         <ion-button
+          v-if="canUpload"
           expand="block"
           class="ion-margin-horizontal"
           :disabled="scriptStore.isUploading"
@@ -165,6 +271,11 @@ function signOut(): void {
 </template>
 
 <style scoped>
+.workspace-select {
+  padding-inline: 1rem;
+  font-weight: 600;
+}
+
 .centered {
   display: flex;
   justify-content: center;

@@ -1,9 +1,13 @@
 import {
+  acceptInvitationResponseSchema,
   apiErrorSchema,
   authResponseSchema,
   characterListResponseSchema,
   characterSchema,
   healthResponseSchema,
+  invitationListResponseSchema,
+  invitationPreviewSchema,
+  invitationSentResponseSchema,
   meResponseSchema,
   noContentSchema,
   registerBodySchema,
@@ -12,11 +16,18 @@ import {
   scriptListResponseSchema,
   stageChangedResponseSchema,
   ttsVoicesResponseSchema,
+  workspaceListResponseSchema,
+  workspaceMemberListResponseSchema,
+  workspaceSummarySchema,
+  type AcceptInvitationResponse,
   type AuthResponse,
   type Character,
   type CharacterListResponse,
   type Gender,
   type HealthResponse,
+  type InvitationListResponse,
+  type InvitationPreview,
+  type InvitationSentResponse,
   type LoginBody,
   type MeResponse,
   type RegisterBody,
@@ -27,6 +38,9 @@ import {
   type UpdateCharacterBody,
   type LossSummary,
   type StageChangedResponse,
+  type WorkspaceListResponse,
+  type WorkspaceMemberListResponse,
+  type WorkspaceSummary,
   type ZodType,
 } from '@osvald/shared';
 
@@ -298,6 +312,8 @@ function query(params: Record<string, string | number | undefined>): string {
 }
 
 export interface UploadScriptInput {
+  /** The workspace the script goes into; only its editor may upload. */
+  workspaceId: string;
   file: File;
   title?: string;
   author?: string;
@@ -309,8 +325,9 @@ export const api = {
     return request('/health', healthResponseSchema, { signal, anonymous: true });
   },
 
+  /** One workspace's library. */
   listScripts(
-    params: { limit?: number; offset?: number } = {},
+    params: { workspaceId: string; limit?: number; offset?: number },
     signal?: AbortSignal,
   ): Promise<ScriptListResponse> {
     return request(`/scripts${query(params)}`, scriptListResponseSchema, { signal });
@@ -338,10 +355,11 @@ export const api = {
       formData.append('author', input.author);
     }
 
-    return request('/scripts/upload', stageChangedResponseSchema, {
-      method: 'POST',
-      formData,
-    });
+    return request(
+      `/scripts/upload${query({ workspaceId: input.workspaceId })}`,
+      stageChangedResponseSchema,
+      { method: 'POST', formData },
+    );
   },
 
   /** What a reparse would replace, shown before the editor confirms. */
@@ -393,6 +411,93 @@ export const api = {
 
   me(token?: string): Promise<MeResponse> {
     return request('/auth/me', meResponseSchema, { token });
+  },
+
+  /** The caller's workspaces, with their role in each. */
+  listWorkspaces(signal?: AbortSignal): Promise<WorkspaceListResponse> {
+    return request('/workspaces', workspaceListResponseSchema, { signal });
+  },
+
+  createWorkspace(name: string): Promise<WorkspaceSummary> {
+    return request('/workspaces', workspaceSummarySchema, { method: 'POST', body: { name } });
+  },
+
+  renameWorkspace(id: string, name: string): Promise<WorkspaceSummary> {
+    return request(`/workspaces/${encodeURIComponent(id)}`, workspaceSummarySchema, {
+      method: 'PATCH',
+      body: { name },
+    });
+  },
+
+  listMembers(workspaceId: string): Promise<WorkspaceMemberListResponse> {
+    return request(
+      `/workspaces/${encodeURIComponent(workspaceId)}/members`,
+      workspaceMemberListResponseSchema,
+    );
+  },
+
+  removeMember(workspaceId: string, userId: string): Promise<null> {
+    return request(
+      `/workspaces/${encodeURIComponent(workspaceId)}/members/${encodeURIComponent(userId)}`,
+      noContentSchema,
+      { method: 'DELETE' },
+    );
+  },
+
+  /** Hands the editor role to `userId`; the caller becomes a member. */
+  transferEditor(workspaceId: string, userId: string): Promise<WorkspaceMemberListResponse> {
+    return request(
+      `/workspaces/${encodeURIComponent(workspaceId)}/editor`,
+      workspaceMemberListResponseSchema,
+      { method: 'POST', body: { userId } },
+    );
+  },
+
+  listInvitations(workspaceId: string): Promise<InvitationListResponse> {
+    return request(
+      `/workspaces/${encodeURIComponent(workspaceId)}/invitations`,
+      invitationListResponseSchema,
+    );
+  },
+
+  invite(workspaceId: string, email: string): Promise<InvitationSentResponse> {
+    return request(
+      `/workspaces/${encodeURIComponent(workspaceId)}/invitations`,
+      invitationSentResponseSchema,
+      { method: 'POST', body: { email } },
+    );
+  },
+
+  /** A fresh link for an open invitation; the old one stops working. */
+  resendInvitation(workspaceId: string, invitationId: string): Promise<InvitationSentResponse> {
+    return request(
+      `/workspaces/${encodeURIComponent(workspaceId)}/invitations/${encodeURIComponent(invitationId)}/resend`,
+      invitationSentResponseSchema,
+      { method: 'POST' },
+    );
+  },
+
+  revokeInvitation(workspaceId: string, invitationId: string): Promise<null> {
+    return request(
+      `/workspaces/${encodeURIComponent(workspaceId)}/invitations/${encodeURIComponent(invitationId)}`,
+      noContentSchema,
+      { method: 'DELETE' },
+    );
+  },
+
+  /** What an invitation link is for; needs no account. */
+  previewInvitation(token: string): Promise<InvitationPreview> {
+    return request(`/invitations/${encodeURIComponent(token)}`, invitationPreviewSchema, {
+      anonymous: true,
+    });
+  },
+
+  acceptInvitation(token: string): Promise<AcceptInvitationResponse> {
+    return request(
+      `/invitations/${encodeURIComponent(token)}/accept`,
+      acceptInvitationResponseSchema,
+      { method: 'POST' },
+    );
   },
 
   /** `GET /tts/voices` — the voices the server can synthesise. */

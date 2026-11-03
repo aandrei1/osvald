@@ -29,6 +29,7 @@ import { useRouter } from 'vue-router';
 import { describeLoss } from '@/lib/loss-summary';
 import { STAGE_COLORS, STAGE_LABELS } from '@/lib/stage';
 import { useScriptStore } from '@/stores/scriptStore';
+import { useWorkspaceStore } from '@/stores/workspaceStore';
 
 /**
  * One script: its cast and its scenes.
@@ -41,8 +42,16 @@ const props = defineProps<{ id: string }>();
 
 const router = useRouter();
 const scriptStore = useScriptStore();
+const workspaceStore = useWorkspaceStore();
 
 const script = computed(() => scriptStore.currentScript);
+/** Reparse and delete are the editor's; the server refuses them to members anyway. */
+const canReparse = computed(
+  () => script.value !== null && workspaceStore.canIn(script.value.workspaceId, 'script:reparse'),
+);
+const canDelete = computed(
+  () => script.value !== null && workspaceStore.canIn(script.value.workspaceId, 'script:delete'),
+);
 const isPending = computed(() => script.value?.stage === 'extracting');
 const isReady = computed(() => script.value !== null && isRehearsableStage(script.value.stage));
 
@@ -51,6 +60,7 @@ const lineTotal = computed(() =>
 );
 
 onMounted(() => {
+  void workspaceStore.ensureLoaded();
   void scriptStore.fetchScriptDetail(props.id, { force: true });
 
   // A reload while a parse is running must pick the watch back up.
@@ -133,8 +143,8 @@ async function confirmDelete(): Promise<void> {
           <ion-back-button default-href="/" />
         </ion-buttons>
         <ion-title>{{ script?.title ?? 'Script' }}</ion-title>
-        <ion-buttons slot="end">
-          <ion-button fill="clear" size="small" @click="confirmDelete">
+        <ion-buttons v-if="canDelete" slot="end">
+          <ion-button fill="clear" size="small" aria-label="Delete script" @click="confirmDelete">
             <ion-icon slot="icon-only" :icon="trashOutline" />
           </ion-button>
         </ion-buttons>
@@ -164,7 +174,7 @@ async function confirmDelete(): Promise<void> {
         <div v-else-if="script.stage === 'failed'" class="status-panel status-panel--error">
           <h2>Parsing failed</h2>
           <p>{{ script.parseError ?? 'No further detail was recorded.' }}</p>
-          <ion-button fill="outline" size="small" @click="confirmReparse">
+          <ion-button v-if="canReparse" fill="outline" size="small" @click="confirmReparse">
             <ion-icon slot="start" :icon="refreshOutline" />
             Try again
           </ion-button>
@@ -238,7 +248,7 @@ async function confirmDelete(): Promise<void> {
 
           <div class="secondary">
             <ion-button
-              v-if="script.sourceFileName !== null && script.description === null"
+              v-if="canReparse && script.sourceFileName !== null && script.description === null"
               fill="clear"
               size="small"
               @click="confirmReparse"

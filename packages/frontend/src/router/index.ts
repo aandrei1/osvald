@@ -33,6 +33,21 @@ const routes: RouteRecordRaw[] = [
     meta: { requiresAuth: true },
   },
   {
+    path: '/workspaces/:id',
+    name: 'workspace',
+    component: () => import('@/views/WorkspacePage.vue'),
+    props: true,
+    meta: { requiresAuth: true },
+  },
+  {
+    // The link in an invitation e-mail. Open without an account, so the
+    // invitee can see what it is before signing up.
+    path: '/invitations/:token',
+    name: 'invitation',
+    component: () => import('@/views/InvitationPage.vue'),
+    props: true,
+  },
+  {
     path: '/login',
     name: 'login',
     component: () => import('@/views/LoginPage.vue'),

@@ -19,8 +19,11 @@ vi.mock('@/services/api', () => ({
 
 import { useScriptStore } from './scriptStore';
 
+const WORKSPACE_ID = '0b6f2a52-3c1d-4e5f-8a9b-0c1d2e3f4a5b';
+
 const SCRIPT: Script = {
   id: '7f5d0f8e-6e1a-4f1e-9b2a-1c2d3e4f5a6b',
+  workspaceId: WORKSPACE_ID,
   userId: '7f5d0f8e-6e1a-4f1e-9b2a-1c2d3e4f5a6e',
   title: 'Avarul',
   author: 'Molière',
@@ -53,23 +56,39 @@ afterEach(() => {
 });
 
 describe('fetchScripts', () => {
-  it('loads the library and reports the total', async () => {
+  it("loads one workspace's library and reports the total", async () => {
     api.listScripts.mockResolvedValue({ items: [SCRIPT], total: 1 });
 
     const store = useScriptStore();
-    await store.fetchScripts();
+    await store.fetchScripts(WORKSPACE_ID);
 
+    expect(api.listScripts).toHaveBeenCalledWith({ workspaceId: WORKSPACE_ID });
     expect(store.scripts).toEqual([SCRIPT]);
     expect(store.total).toBe(1);
     expect(store.isLoading).toBe(false);
     expect(store.error).toBeNull();
   });
 
+  it('drops a slow answer for a workspace the user has left', async () => {
+    let answerFirst: (value: unknown) => void = () => undefined;
+    api.listScripts
+      .mockReturnValueOnce(new Promise((resolve) => (answerFirst = resolve)))
+      .mockResolvedValueOnce({ items: [], total: 0 });
+
+    const store = useScriptStore();
+    const first = store.fetchScripts(WORKSPACE_ID);
+    await store.fetchScripts('1c7e3b63-4d2e-4f60-9bac-1d2e3f4a5b6c');
+    answerFirst({ items: [SCRIPT], total: 1 });
+    await first;
+
+    expect(store.scripts).toEqual([]);
+  });
+
   it('surfaces a failure as a readable error', async () => {
     api.listScripts.mockRejectedValue(new Error('Network down'));
 
     const store = useScriptStore();
-    await store.fetchScripts();
+    await store.fetchScripts(WORKSPACE_ID);
 
     expect(store.scripts).toEqual([]);
     expect(store.error).toBe('Network down');
@@ -110,6 +129,7 @@ describe('uploadScript', () => {
 
     const store = useScriptStore();
     const uploaded = await store.uploadScript({
+      workspaceId: WORKSPACE_ID,
       file: new File(['%PDF-1.7'], 'avarul.pdf', { type: 'application/pdf' }),
     });
 
@@ -123,6 +143,7 @@ describe('uploadScript', () => {
 
     const store = useScriptStore();
     const uploaded = await store.uploadScript({
+      workspaceId: WORKSPACE_ID,
       file: new File(['not a pdf'], 'notes.txt', { type: 'text/plain' }),
     });
 
@@ -183,7 +204,7 @@ describe('deleteScript', () => {
     api.deleteScript.mockResolvedValue(null);
 
     const store = useScriptStore();
-    await store.fetchScripts();
+    await store.fetchScripts(WORKSPACE_ID);
     await store.fetchScriptDetail(SCRIPT.id);
 
     await expect(store.deleteScript(SCRIPT.id)).resolves.toBe(true);
@@ -198,7 +219,7 @@ describe('deleteScript', () => {
     api.deleteScript.mockRejectedValue(new Error('Not found'));
 
     const store = useScriptStore();
-    await store.fetchScripts();
+    await store.fetchScripts(WORKSPACE_ID);
 
     await expect(store.deleteScript(SCRIPT.id)).resolves.toBe(false);
 

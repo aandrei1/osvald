@@ -47,6 +47,7 @@ import { buildCue } from '@/lib/cue';
 import type { SpeechVoice } from '@/services/speech';
 import { useRehearsalStore } from '@/stores/rehearsalStore';
 import { useScriptStore } from '@/stores/scriptStore';
+import { useWorkspaceStore } from '@/stores/workspaceStore';
 
 /**
  * The rehearsal view.
@@ -65,6 +66,7 @@ const props = defineProps<{ id: string }>();
 const route = useRoute();
 const router = useRouter();
 const scriptStore = useScriptStore();
+const workspaceStore = useWorkspaceStore();
 const rehearsal = useRehearsalStore();
 
 const isSettingsOpen = ref(false);
@@ -72,6 +74,10 @@ const transcript = ref<HTMLElement | null>(null);
 
 const script = computed(() => scriptStore.currentScript);
 const hasChosenRole = computed(() => rehearsal.myCharacterId !== null);
+/** A gender is saved on the script, so only the editor changes it; voices here stay local. */
+const canEditGender = computed(
+  () => script.value !== null && workspaceStore.canIn(script.value.workspaceId, 'script:edit'),
+);
 
 /** The scene asked for in the URL, if any. */
 const scopedSceneId = computed(() =>
@@ -79,6 +85,7 @@ const scopedSceneId = computed(() =>
 );
 
 onMounted(async () => {
+  void workspaceStore.ensureLoaded();
   rehearsal.reset();
   rehearsal.setScope(scopedSceneId.value);
   await scriptStore.fetchScriptDetail(props.id);
@@ -498,6 +505,7 @@ const scenePosition = computed(() =>
             <ion-select
               class="gender-select"
               :value="character.gender"
+              :disabled="!canEditGender"
               label="Gender"
               label-placement="stacked"
               interface="popover"
