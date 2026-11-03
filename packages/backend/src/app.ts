@@ -12,10 +12,16 @@ import {
 } from 'fastify-type-provider-zod';
 import type { Redis } from 'ioredis';
 
+import { createBullmqExtractionQueue } from './adapters/bullmq-extraction-queue.js';
+import { createLocalSourceFileStore } from './adapters/local-source-file-store.js';
 import { corsOrigins, env } from './config/env.js';
 import { createDatabase, type Database } from './db/client.js';
+import { ScriptProductionFlow } from './flows/script-production-flow.js';
 import { registerAuth } from './plugins/auth.js';
 import { registerErrorHandler } from './plugins/error-handler.js';
+import { systemClock, type Clock } from './ports/clock.js';
+import type { ExtractionQueue } from './ports/extraction-queue.js';
+import type { SourceFileStore } from './ports/source-file-store.js';
 import { createRedisClient } from './queue/connection.js';
 import { createQueueRegistry, type QueueRegistry } from './queue/queues.js';
 import { registerRoutes } from './routes/index.js';
@@ -32,6 +38,10 @@ export interface BuildAppOptions {
   db?: Database;
   redis?: Redis;
   queues?: QueueRegistry;
+  /** Ports of `ScriptProductionFlow`; default to BullMQ, the local disk and the system clock. */
+  extractionQueue?: ExtractionQueue;
+  sourceFiles?: SourceFileStore;
+  clock?: Clock;
 }
 
 interface ResolvedDatabase {
@@ -108,6 +118,17 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       await queues.close();
     });
   }
+
+  app.decorate(
+    'scriptFlow',
+    new ScriptProductionFlow({
+      db: database.db,
+      extractionQueue: options.extractionQueue ?? createBullmqExtractionQueue(queues.scriptParsing),
+      sourceFiles: options.sourceFiles ?? createLocalSourceFileStore(app.log),
+      clock: options.clock ?? systemClock,
+      logger: app.log,
+    }),
+  );
 
   await app.register(fastifyCors, {
     origin: corsOrigins,

@@ -9,7 +9,7 @@ import { createDatabase, type Database } from '../db/client.js';
 import { scripts } from '../db/schema/scripts.js';
 import { createConsoleLogger } from '../lib/logger.js';
 import { parseScriptText, splitIntoWorks } from '../parsing/script-parser.js';
-import { createUploadedScript, saveParseResult } from '../services/script.service.js';
+import { insertScript, saveParseResult } from '../services/script.service.js';
 import { upsertUser } from '../services/user.service.js';
 
 /**
@@ -102,18 +102,23 @@ async function importWorks(db: Database, options: SeedOptions, userId: string): 
       continue;
     }
 
-    const script = await createUploadedScript(db, {
-      userId,
-      title,
-      author: options.author,
-      description: `Seeded from ${options.label}`,
-      sourceFileName: options.label.split('/').pop() ?? options.label,
-      // No PDF on disk, so re-parsing from source is not possible. The route
-      // rejects a reparse for exactly this case.
-      sourceFilePath: null,
-    });
+    // Extraction is what the seed skips, so the script lands straight in review.
+    const summary = await db.transaction(async (tx) => {
+      const script = await insertScript(tx, {
+        userId,
+        title,
+        author: options.author,
+        description: `Seeded from ${options.label}`,
+        sourceFileName: options.label.split('/').pop() ?? options.label,
+        // No PDF on disk, so re-parsing from source is not possible. The flow
+        // rejects a reparse for exactly this case.
+        sourceFilePath: null,
+        pageCount: parsed.stats.pageCount > 0 ? parsed.stats.pageCount : null,
+        stage: 'in_review',
+      });
 
-    const summary = await saveParseResult(db, script.id, parsed);
+      return saveParseResult(tx, script.id, parsed);
+    });
     imported += 1;
 
     logger.info(

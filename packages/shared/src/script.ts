@@ -3,14 +3,7 @@ import { z } from 'zod';
 import { characterSchema } from './character.js';
 import { idSchema, isoDateTimeSchema } from './common.js';
 import { sceneWithLinesSchema } from './scene.js';
-
-/**
- * `status` drives the upload → parse → rehearsal flow:
- * `uploaded` (file stored, job not picked up yet) → `parsing` (worker running)
- * → `parsed` (scenes/lines written) or `failed` (see the job for details).
- */
-export const scriptStatusSchema = z.enum(['uploaded', 'parsing', 'parsed', 'failed']);
-export type ScriptStatus = z.infer<typeof scriptStatusSchema>;
+import { scriptStageSchema } from './script-stage.js';
 
 export const scriptSchema = z.object({
   id: idSchema,
@@ -19,12 +12,15 @@ export const scriptSchema = z.object({
   title: z.string().min(1).max(300),
   author: z.string().max(300).nullable(),
   description: z.string().nullable(),
-  status: scriptStatusSchema,
+  /** Where the script is in its production flow; see `script-stage.ts`. */
+  stage: scriptStageSchema,
+  /** When the script entered `stage`, e.g. to tell how long extraction has run. */
+  stageEnteredAt: isoDateTimeSchema,
   /** Original file name of the uploaded PDF, if any. */
   sourceFileName: z.string().nullable(),
   /** Pages found in the source document, once the parser has opened it. */
   pageCount: z.number().int().positive().nullable(),
-  /** Why the last parse attempt failed. `null` unless `status` is `failed`. */
+  /** Why the last extraction failed. `null` unless `stage` is `failed`. */
   parseError: z.string().nullable(),
   createdAt: isoDateTimeSchema,
   updatedAt: isoDateTimeSchema,
@@ -55,10 +51,11 @@ export const createScriptBodySchema = z.object({
 });
 export type CreateScriptBody = z.infer<typeof createScriptBodySchema>;
 
-/** Response of `POST /scripts/upload` — the stored script plus the queue job id. */
-export const uploadScriptResponseSchema = z.object({
+/**
+ * Answer of every flow command (upload, reparse, …): the script in its new
+ * stage. Commands answer as soon as the stage is saved, not when the work ends.
+ */
+export const stageChangedResponseSchema = z.object({
   script: scriptSchema,
-  jobId: z.string(),
-  queueName: z.string(),
 });
-export type UploadScriptResponse = z.infer<typeof uploadScriptResponseSchema>;
+export type StageChangedResponse = z.infer<typeof stageChangedResponseSchema>;

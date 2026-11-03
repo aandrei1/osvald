@@ -9,8 +9,8 @@ import {
   registerBodySchema,
   scriptDetailSchema,
   scriptListResponseSchema,
+  stageChangedResponseSchema,
   ttsVoicesResponseSchema,
-  uploadScriptResponseSchema,
   type AuthResponse,
   type Character,
   type CharacterListResponse,
@@ -24,7 +24,7 @@ import {
   type SynthesizeSpeechBody,
   type TtsVoicesResponse,
   type UpdateCharacterBody,
-  type UploadScriptResponse,
+  type StageChangedResponse,
   type ZodType,
 } from '@osvald/shared';
 
@@ -324,7 +324,8 @@ export const api = {
     });
   },
 
-  uploadScript(input: UploadScriptInput): Promise<UploadScriptResponse> {
+  /** Starts the import: the script comes back in `extracting`. */
+  uploadScript(input: UploadScriptInput): Promise<StageChangedResponse> {
     const formData = new FormData();
     formData.append('file', input.file);
 
@@ -335,15 +336,15 @@ export const api = {
       formData.append('author', input.author);
     }
 
-    return request('/scripts/upload', uploadScriptResponseSchema, {
+    return request('/scripts/upload', stageChangedResponseSchema, {
       method: 'POST',
       formData,
     });
   },
 
-  /** Re-runs the parsing pipeline over the stored PDF. */
-  reparseScript(id: string): Promise<UploadScriptResponse> {
-    return request(`/scripts/${encodeURIComponent(id)}/reparse`, uploadScriptResponseSchema, {
+  /** Extracts the stored PDF again, under a new run. */
+  reparseScript(id: string): Promise<StageChangedResponse> {
+    return request(`/scripts/${encodeURIComponent(id)}/reparse`, stageChangedResponseSchema, {
       method: 'POST',
     });
   },

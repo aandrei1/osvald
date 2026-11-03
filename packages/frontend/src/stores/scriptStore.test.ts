@@ -23,7 +23,8 @@ const SCRIPT: Script = {
   title: 'Avarul',
   author: 'Molière',
   description: null,
-  status: 'parsed',
+  stage: 'in_review',
+  stageEnteredAt: '2026-10-18T12:00:00.000Z',
   sourceFileName: 'avarul.pdf',
   pageCount: 286,
   parseError: null,
@@ -99,20 +100,17 @@ describe('fetchScriptDetail', () => {
 });
 
 describe('uploadScript', () => {
-  it('adds the uploaded script and starts watching the parse', async () => {
-    api.uploadScript.mockResolvedValue({
-      script: SCRIPT,
-      jobId: 'job-1',
-      queueName: 'script-parsing',
-    });
+  it('adds the uploaded script and starts watching the extraction', async () => {
+    const extracting: Script = { ...SCRIPT, stage: 'extracting' };
+    api.uploadScript.mockResolvedValue({ script: extracting });
 
     const store = useScriptStore();
     const uploaded = await store.uploadScript({
       file: new File(['%PDF-1.7'], 'avarul.pdf', { type: 'application/pdf' }),
     });
 
-    expect(uploaded).toEqual(SCRIPT);
-    expect(store.scripts).toEqual([SCRIPT]);
+    expect(uploaded).toEqual(extracting);
+    expect(store.scripts).toEqual([extracting]);
     expect(store.parsingIds).toContain(SCRIPT.id);
   });
 
@@ -130,17 +128,15 @@ describe('uploadScript', () => {
 });
 
 describe('reparseScript', () => {
-  it('merges the new status and resumes watching the parse', async () => {
+  it('merges the new stage and resumes watching the extraction', async () => {
     api.reparseScript.mockResolvedValue({
-      script: { ...SCRIPT, status: 'uploaded' },
-      jobId: 'job-2',
-      queueName: 'script-parsing',
+      script: { ...SCRIPT, stage: 'extracting' },
     });
 
     const store = useScriptStore();
     await expect(store.reparseScript(SCRIPT.id)).resolves.toBe(true);
 
-    expect(store.scripts[0]?.status).toBe('uploaded');
+    expect(store.scripts[0]?.stage).toBe('extracting');
     expect(store.parsingIds).toContain(SCRIPT.id);
   });
 });

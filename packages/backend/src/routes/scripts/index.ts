@@ -11,25 +11,22 @@ import {
   characterParamsSchema,
   characterSchema,
   idParamsSchema,
+  lossSummarySchema,
   noContentSchema,
   paginationQuerySchema,
   scriptDetailSchema,
   scriptListResponseSchema,
+  stageChangedResponseSchema,
   updateCharacterBodySchema,
-  uploadScriptResponseSchema,
 } from '@osvald/shared';
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 
 import { env } from '../../config/env.js';
 import { BadRequestError } from '../../lib/errors.js';
-import { SCRIPT_PARSING_QUEUE } from '../../queue/jobs/script-parsing.js';
 import {
-  createUploadedScript,
-  deleteScript,
   getScriptDetail,
   getScriptRow,
   listScripts,
-  mapScriptRow,
   setCharacterGender,
 } from '../../services/script.service.js';
 
@@ -37,14 +34,14 @@ import {
  * `/scripts` routes.
  *
  * Every route requires a bearer token: a script is personal rehearsal material.
- * Uploading streams the PDF to disk, inserts the row and enqueues a
- * `script-parsing` job — the parsing itself happens in the worker
- * (`src/queue/jobs/script-parsing.ts`), never on the request.
+ * The routes are thin: they validate the request and call one command of
+ * `ScriptProductionFlow` (`app.scriptFlow`), which answers with the new stage.
+ * Uploading streams the PDF to disk first; extraction happens on the worker,
+ * never on the request.
  */
 
 interface StoredUpload {
   fileName: string;
-  mimeType: string;
   storedPath: string;
 }
 
@@ -84,7 +81,7 @@ async function storeUpload(part: MultipartFile): Promise<StoredUpload> {
     throw error;
   }
 
-  return { fileName, mimeType: part.mimetype, storedPath };
+  return { fileName, storedPath };
 }
 
 export const scriptRoutes: FastifyPluginAsyncZod = async (app, _opts) => {
@@ -185,11 +182,11 @@ export const scriptRoutes: FastifyPluginAsyncZod = async (app, _opts) => {
         tags: ['scripts'],
         summary: 'Upload a script PDF',
         description:
-          'Accepts a single multipart/form-data PDF plus optional `title`, `author` and `description` fields. Stores the file, inserts the script row and enqueues a `script-parsing` job.',
+          'Accepts a single multipart/form-data PDF plus optional `title`, `author` and `description` fields. Stores the file and starts the import: the script answers in `extracting` while the worker reads it.',
         consumes: ['multipart/form-data'],
         security: [{ bearerAuth: [] }],
         response: {
-          201: uploadScriptResponseSchema,
+          201: stageChangedResponseSchema,
           400: apiErrorSchema,
           401: apiErrorSchema,
           413: apiErrorSchema,
@@ -197,8 +194,6 @@ export const scriptRoutes: FastifyPluginAsyncZod = async (app, _opts) => {
       },
     },
     async (request, reply) => {
-      const requestedByUserId = request.user.sub;
-
       const fields = new Map<string, string>();
       let upload: StoredUpload | undefined;
 
@@ -230,38 +225,42 @@ export const scriptRoutes: FastifyPluginAsyncZod = async (app, _opts) => {
 
       const requestedTitle = fields.get('title')?.trim();
 
-      const script = await createUploadedScript(app.db, {
-        userId: requestedByUserId,
-        title:
-          requestedTitle !== undefined && requestedTitle.length > 0
-            ? requestedTitle
-            : titleFromFileName(upload.fileName),
-        author: fields.get('author') ?? null,
-        description: fields.get('description') ?? null,
-        sourceFileName: upload.fileName,
-        sourceFilePath: upload.storedPath,
-      });
-
-      // TODO(scripts): if enqueueing fails (Redis unreachable) the script stays
-      // in `uploaded`. Move to a transactional outbox / retry sweep. Using the
-      // script id as jobId keeps re-enqueueing idempotent.
-      const job = await app.queues.scriptParsing.add(
-        'parse-script',
+      const { script } = await app.scriptFlow.startImport(
+        { userId: request.user.sub },
         {
-          scriptId: script.id,
-          filePath: upload.storedPath,
-          mimeType: upload.mimeType,
-          requestedByUserId: script.userId,
+          fileName: upload.fileName,
+          storedPath: upload.storedPath,
+          title:
+            requestedTitle !== undefined && requestedTitle.length > 0
+              ? requestedTitle
+              : titleFromFileName(upload.fileName),
+          author: fields.get('author') ?? null,
+          description: fields.get('description') ?? null,
         },
-        { jobId: script.id },
       );
 
-      return reply.status(201).send({
-        script,
-        jobId: job.id ?? script.id,
-        queueName: SCRIPT_PARSING_QUEUE,
-      });
+      return reply.status(201).send({ script });
     },
+  );
+
+  app.get(
+    '/:id/reparse-preview',
+    {
+      schema: {
+        tags: ['scripts'],
+        summary: 'What a reparse would replace',
+        description: 'Shown to the editor before they confirm a reparse.',
+        security: [{ bearerAuth: [] }],
+        params: idParamsSchema,
+        response: {
+          200: lossSummarySchema,
+          401: apiErrorSchema,
+          404: apiErrorSchema,
+        },
+      },
+    },
+    async (request) =>
+      app.scriptFlow.previewReparse({ userId: request.user.sub }, request.params.id),
   );
 
   app.post(
@@ -269,49 +268,47 @@ export const scriptRoutes: FastifyPluginAsyncZod = async (app, _opts) => {
     {
       schema: {
         tags: ['scripts'],
-        summary: 'Run the parsing pipeline again',
+        summary: 'Extract the stored PDF again',
         description:
-          'Useful after a failed parse or a parser improvement. The previous scenes, characters and lines are replaced only once the new parse succeeds.',
+          'Allowed in every stage, under a new run. The current scenes, characters and lines are replaced once the new extraction completes; text corrected by hand is lost, manual genders are kept.',
         security: [{ bearerAuth: [] }],
         params: idParamsSchema,
         response: {
-          202: uploadScriptResponseSchema,
+          202: stageChangedResponseSchema,
           400: apiErrorSchema,
+          401: apiErrorSchema,
+          404: apiErrorSchema,
+          409: apiErrorSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const { script } = await app.scriptFlow.reparse(
+        { userId: request.user.sub },
+        request.params.id,
+      );
+      return reply.status(202).send({ script });
+    },
+  );
+
+  app.get(
+    '/:id/delete-preview',
+    {
+      schema: {
+        tags: ['scripts'],
+        summary: 'What deleting the script would remove',
+        description: 'Shown to the editor before they confirm a delete.',
+        security: [{ bearerAuth: [] }],
+        params: idParamsSchema,
+        response: {
+          200: lossSummarySchema,
           401: apiErrorSchema,
           404: apiErrorSchema,
         },
       },
     },
-    async (request, reply) => {
-      const script = await getScriptRow(app.db, request.params.id, request.user.sub);
-
-      if (script.sourceFilePath === null) {
-        throw new BadRequestError(
-          'This script has no stored source file, so it cannot be re-parsed',
-        );
-      }
-
-      // An earlier job with this id may still be retained in the queue; remove
-      // it so the re-run is not rejected as a duplicate.
-      await app.queues.scriptParsing.remove(script.id).catch(() => undefined);
-
-      const job = await app.queues.scriptParsing.add(
-        'parse-script',
-        {
-          scriptId: script.id,
-          filePath: script.sourceFilePath,
-          mimeType: 'application/pdf',
-          requestedByUserId: script.userId,
-        },
-        { jobId: script.id },
-      );
-
-      return reply.status(202).send({
-        script: { ...mapScriptRow(script), status: 'uploaded' },
-        jobId: job.id ?? script.id,
-        queueName: SCRIPT_PARSING_QUEUE,
-      });
-    },
+    async (request) =>
+      app.scriptFlow.previewDelete({ userId: request.user.sub }, request.params.id),
   );
 
   app.delete(
@@ -330,17 +327,7 @@ export const scriptRoutes: FastifyPluginAsyncZod = async (app, _opts) => {
       },
     },
     async (request, reply) => {
-      const script = await getScriptRow(app.db, request.params.id, request.user.sub);
-
-      await deleteScript(app.db, script.id);
-
-      if (script.sourceFilePath !== null) {
-        // The row is already gone; a leftover file is not worth failing over.
-        await rm(script.sourceFilePath, { force: true }).catch((error: unknown) => {
-          request.log.warn({ err: error }, 'could not remove the stored upload');
-        });
-      }
-
+      await app.scriptFlow.delete({ userId: request.user.sub }, request.params.id);
       return reply.status(204).send(null);
     },
   );
@@ -349,6 +336,6 @@ export const scriptRoutes: FastifyPluginAsyncZod = async (app, _opts) => {
    * TODO(scripts):
    *   POST   /scripts              create an empty script (manual entry)
    *   PATCH  /scripts/:id          title/author/description
-   *   GET    /scripts/:id/progress  live parse progress from the BullMQ job
+   *   GET    /scripts/:id/progress  live extraction progress from the BullMQ job
    */
 };

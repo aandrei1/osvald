@@ -5,33 +5,34 @@ import { UnrecoverableError, type Job } from 'bullmq';
 import { z } from 'zod';
 
 import { env } from '../../config/env.js';
-import type { Database } from '../../db/client.js';
+import type { ScriptProductionFlow } from '../../flows/script-production-flow.js';
 import type { Logger } from '../../lib/logger.js';
 import type { GenderClassifier } from '../../parsing/gender/gender-classifier.js';
 import { parseScriptText } from '../../parsing/script-parser.js';
+import type { ExtractionJob, RunRef } from '../../ports/extraction-queue.js';
 import {
   OcrServiceError,
   type OcrClient,
   type PdfTextResponse,
 } from '../../services/ocr.client.js';
-import { saveParseResult, updateScriptStatus } from '../../services/script.service.js';
 
 /** Queue name used by the API (producer) and the worker (consumer). */
 export const SCRIPT_PARSING_QUEUE = 'script-parsing';
 
 export const scriptParsingJobDataSchema = z.object({
   scriptId: idSchema,
+  /** The run this job belongs to; reactions with an older run are ignored. */
+  runId: idSchema,
   /** Absolute path of the stored upload. */
   filePath: z.string().min(1),
-  /** Validated at upload time; the worker can re-check before parsing. */
-  mimeType: z.string().min(1),
-  /** Owner at the time of upload, `null` for anonymous uploads. */
-  requestedByUserId: idSchema.nullable(),
-});
+}) satisfies z.ZodType<ExtractionJob>;
 export type ScriptParsingJobData = z.infer<typeof scriptParsingJobDataSchema>;
 
 export const scriptParsingJobResultSchema = z.object({
   scriptId: idSchema,
+  runId: idSchema,
+  /** The run was no longer current (reparsed or deleted), so nothing was saved. */
+  stale: z.boolean(),
   sceneCount: z.number().int().nonnegative(),
   characterCount: z.number().int().nonnegative(),
   lineCount: z.number().int().nonnegative(),
@@ -40,7 +41,7 @@ export const scriptParsingJobResultSchema = z.object({
 export type ScriptParsingJobResult = z.infer<typeof scriptParsingJobResultSchema>;
 
 export interface ScriptParsingContext {
-  db: Database;
+  flow: ScriptProductionFlow;
   logger: Logger;
   ocr: OcrClient;
   genders: GenderClassifier;
@@ -82,28 +83,58 @@ function describeEmptyResult(extraction: PdfTextResponse): string {
   );
 }
 
+/** BullMQ will not try again after this attempt. */
+function isLastAttempt(job: Job<ScriptParsingJobData, ScriptParsingJobResult>): boolean {
+  return job.attemptsMade + 1 >= (job.opts.attempts ?? 1);
+}
+
+function staleResult(run: RunRef, startedAt: number): ScriptParsingJobResult {
+  return {
+    ...run,
+    stale: true,
+    sceneCount: 0,
+    characterCount: 0,
+    lineCount: 0,
+    durationMs: Date.now() - startedAt,
+  };
+}
+
 /**
- * Runs one script-parsing job: PDF → text → scenes/characters/lines.
+ * Runs one extraction: PDF → text → scenes/characters/lines.
  *
- *   1. mark the script `parsing`
+ *   1. skip the work when the run is no longer current
  *   2. hand the file to the OCR service, which reads the text layer where there
  *      is one and recognises the pages that have none
  *   3. parse the text into scenes, characters and lines
- *   4. persist the result in one transaction and mark the script `parsed`
+ *   4. report back through `onExtractionCompleted`, which saves the lines and
+ *      moves the script to review in one transaction
  *
- * Failures are recorded on the script row (`status: 'failed'` plus
- * `parse_error`) so the UI can explain what went wrong, then rethrown so BullMQ
- * records the attempt. Problems that cannot improve on retry — a malformed PDF,
- * a missing OCR stack — are thrown as `UnrecoverableError` to skip the backoff.
+ * A failure is reported through `onExtractionFailed` only after the last
+ * attempt, so the script stays `extracting` while BullMQ retries. Problems that
+ * cannot improve on retry (a malformed PDF, a missing OCR stack) are thrown as
+ * `UnrecoverableError` to skip the backoff.
  */
 export async function processScriptParsingJob(
   job: Job<ScriptParsingJobData, ScriptParsingJobResult>,
   ctx: ScriptParsingContext,
 ): Promise<ScriptParsingJobResult> {
   const startedAt = Date.now();
-  const data = scriptParsingJobDataSchema.parse(job.data);
+  const parsedData = scriptParsingJobDataSchema.safeParse(job.data);
 
-  await updateScriptStatus(ctx.db, data.scriptId, 'parsing');
+  if (!parsedData.success) {
+    // Jobs queued before run ids existed land here. The recovery job queues
+    // their scripts again under the current run.
+    throw new UnrecoverableError(`Invalid job data: ${parsedData.error.message}`);
+  }
+
+  const data = parsedData.data;
+  const run: RunRef = { scriptId: data.scriptId, runId: data.runId };
+
+  if (!(await ctx.flow.isRunCurrent(run))) {
+    ctx.logger.info(`skipping run ${run.runId} of script ${run.scriptId}: no longer current`);
+    return staleResult(run, startedAt);
+  }
+
   await job.updateProgress(PROGRESS.started);
 
   try {
@@ -145,34 +176,44 @@ export async function processScriptParsingJob(
       parsed.characters.map((character) => [character.name, ctx.genders.classify(character)]),
     );
 
-    const summary = await saveParseResult(ctx.db, data.scriptId, parsed, { genderByName });
+    const outcome = await ctx.flow.onExtractionCompleted(run, { parsed, genderByName });
     await job.updateProgress(PROGRESS.saved);
 
+    if (outcome.kind === 'stale') {
+      ctx.logger.info(`discarded run ${run.runId} of script ${run.scriptId}: no longer current`);
+      return staleResult(run, startedAt);
+    }
+
+    const lineCount = parsed.scenes.reduce((total, scene) => total + scene.lines.length, 0);
     ctx.logger.info(
-      `parsed script ${data.scriptId}: ${summary.sceneCount} scene(s), ` +
-        `${summary.characterCount} character(s), ${summary.lineCount} line(s)`,
+      `parsed script ${run.scriptId}: ${parsed.scenes.length} scene(s), ` +
+        `${parsed.characters.length} character(s), ${lineCount} line(s)`,
     );
 
     return {
-      scriptId: data.scriptId,
-      sceneCount: summary.sceneCount,
-      characterCount: summary.characterCount,
-      lineCount: summary.lineCount,
+      ...run,
+      stale: false,
+      sceneCount: parsed.scenes.length,
+      characterCount: parsed.characters.length,
+      lineCount,
       durationMs: Date.now() - startedAt,
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown parsing failure';
 
-    await updateScriptStatus(ctx.db, data.scriptId, 'failed', message).catch(
-      (writeError: unknown) => {
-        // The job failure must still surface even if the status write fails.
-        ctx.logger.error('could not record the parse failure', writeError);
-      },
-    );
-
     // A client error from the OCR service (bad PDF, missing OCR stack) will fail
     // identically on every attempt, so skip the retries.
-    if (error instanceof OcrServiceError && !error.retryable) {
+    const unrecoverable =
+      error instanceof UnrecoverableError || (error instanceof OcrServiceError && !error.retryable);
+
+    if (unrecoverable || isLastAttempt(job)) {
+      await ctx.flow.onExtractionFailed(run, { message }).catch((writeError: unknown) => {
+        // The job failure must still surface; the recovery job fails the run later.
+        ctx.logger.error('could not record the extraction failure', writeError);
+      });
+    }
+
+    if (unrecoverable && !(error instanceof UnrecoverableError)) {
       throw new UnrecoverableError(message);
     }
 

@@ -21,18 +21,20 @@ import {
   IonToolbar,
   alertController,
 } from '@ionic/vue';
+import { isRehearsableStage } from '@osvald/shared';
 import { playCircleOutline, refreshOutline, trashOutline } from 'ionicons/icons';
 import { computed, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
 
+import { STAGE_COLORS, STAGE_LABELS } from '@/lib/stage';
 import { useScriptStore } from '@/stores/scriptStore';
 
 /**
  * One script: its cast and its scenes.
  *
- * This is also where a parse is watched. A script arrives here moments after
- * upload, still `queued`, so the page has to be useful while there is nothing
- * to show yet — and has to explain a failure well enough to act on.
+ * This is also where an extraction is watched. A script arrives here moments
+ * after upload, still `extracting`, so the page has to be useful while there is
+ * nothing to show yet — and has to explain a failure well enough to act on.
  */
 const props = defineProps<{ id: string }>();
 
@@ -40,10 +42,8 @@ const router = useRouter();
 const scriptStore = useScriptStore();
 
 const script = computed(() => scriptStore.currentScript);
-const isPending = computed(
-  () => script.value !== null && ['uploaded', 'parsing'].includes(script.value.status),
-);
-const isReady = computed(() => script.value?.status === 'parsed');
+const isPending = computed(() => script.value?.stage === 'extracting');
+const isReady = computed(() => script.value !== null && isRehearsableStage(script.value.stage));
 
 const lineTotal = computed(() =>
   (script.value?.scenes ?? []).reduce((total, scene) => total + scene.lines.length, 0),
@@ -129,19 +129,13 @@ async function confirmDelete(): Promise<void> {
         <div v-if="isPending" class="status-panel">
           <ion-progress-bar type="indeterminate" />
           <h2>Reading the script</h2>
-          <p>
-            {{
-              script.status === 'uploaded'
-                ? 'Queued — waiting for the parsing worker to pick it up.'
-                : 'Extracting the text and splitting it into scenes and lines.'
-            }}
-          </p>
+          <p>Extracting the text and splitting it into scenes and lines.</p>
           <ion-note>
             A scanned PDF goes through OCR, which can take a few minutes. This page updates itself.
           </ion-note>
         </div>
 
-        <div v-else-if="script.status === 'failed'" class="status-panel status-panel--error">
+        <div v-else-if="script.stage === 'failed'" class="status-panel status-panel--error">
           <h2>Parsing failed</h2>
           <p>{{ script.parseError ?? 'No further detail was recorded.' }}</p>
           <ion-button fill="outline" size="small" @click="reparse">
@@ -163,7 +157,9 @@ async function confirmDelete(): Promise<void> {
                 </template>
               </ion-note>
             </ion-label>
-            <ion-badge slot="end" color="success">ready</ion-badge>
+            <ion-badge slot="end" :color="STAGE_COLORS[script.stage]">
+              {{ STAGE_LABELS[script.stage] }}
+            </ion-badge>
           </ion-item>
         </ion-list>
 

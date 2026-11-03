@@ -5,7 +5,7 @@ import {
   noContentSchema,
   paginationQuerySchema,
   scriptSchema,
-  scriptStatusSchema,
+  scriptStageSchema,
   synthesizeSpeechBodySchema,
   registerBodySchema,
 } from './index.js';
@@ -22,7 +22,8 @@ const validScript = {
   title: 'Avarul',
   author: 'Molière',
   description: null,
-  status: 'parsed',
+  stage: 'in_review',
+  stageEnteredAt: '2026-10-18T12:00:00.000Z',
   sourceFileName: 'avarul.pdf',
   pageCount: 286,
   parseError: null,
@@ -45,16 +46,23 @@ describe('scriptSchema', () => {
     ).toBe(false);
   });
 
-  it('rejects an unknown status', () => {
-    expect(scriptSchema.safeParse({ ...validScript, status: 'done' }).success).toBe(false);
+  it('rejects an unknown stage', () => {
+    expect(scriptSchema.safeParse({ ...validScript, stage: 'parsed' }).success).toBe(false);
   });
 
   it('rejects an empty title', () => {
     expect(scriptSchema.safeParse({ ...validScript, title: '' }).success).toBe(false);
   });
 
-  it('lists exactly the states the upload → parse flow uses', () => {
-    expect(scriptStatusSchema.options).toEqual(['uploaded', 'parsing', 'parsed', 'failed']);
+  it('lists exactly the stages of the production flow', () => {
+    expect(scriptStageSchema.options).toEqual([
+      'extracting',
+      'in_review',
+      'synthesizing',
+      'paused_budget',
+      'ready',
+      'failed',
+    ]);
   });
 });
 

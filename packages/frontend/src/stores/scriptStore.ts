@@ -1,4 +1,9 @@
-import type { Gender, Script, ScriptDetail } from '@osvald/shared';
+import {
+  isWorkStage,
+  type Gender,
+  type Script,
+  type ScriptDetail,
+} from '@osvald/shared';
 import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
 
@@ -7,18 +12,16 @@ import { api, toErrorMessage, type UploadScriptInput } from '@/services/api';
 /**
  * The script library and the currently opened script.
  *
- * Parsing happens on a queue worker, so an upload returns before there is
+ * Extraction happens on a queue worker, so an upload returns before there is
  * anything to rehearse. `watchParsing()` exists for that gap: it polls the
- * script until it settles into `parsed` or `failed`, which is what lets the UI
- * show progress instead of an empty scene list.
+ * script until it leaves its work stage (`extracting`), which is what lets the
+ * UI show progress instead of an empty scene list.
  */
 
 /** How often to re-check a script that is still being parsed. */
 const POLL_INTERVAL_MS = 1_500;
 /** Stop polling eventually, so a stuck worker cannot spin forever. */
 const POLL_TIMEOUT_MS = 10 * 60 * 1000;
-
-const PENDING_STATUSES = new Set<Script['status']>(['uploaded', 'parsing']);
 
 export const useScriptStore = defineStore('script', () => {
   const scripts = ref<Script[]>([]);
@@ -48,7 +51,7 @@ export const useScriptStore = defineStore('script', () => {
       // Resume watching anything the server still reports as unfinished — for
       // instance after a page reload during a long parse.
       for (const script of response.items) {
-        if (PENDING_STATUSES.has(script.status)) {
+        if (isWorkStage(script.stage)) {
           watchParsing(script.id);
         }
       }
@@ -97,7 +100,7 @@ export const useScriptStore = defineStore('script', () => {
    * Polls one script until parsing finishes.
    *
    * The detail endpoint is used rather than the list so that the open script's
-   * scenes and characters arrive in the same response that reports `parsed` —
+   * scenes and characters arrive in the same response that reports `in_review` —
    * otherwise the UI would flip to "ready" a moment before it has lines.
    */
   function watchParsing(id: string): void {
@@ -129,7 +132,7 @@ export const useScriptStore = defineStore('script', () => {
           currentScript.value = detail;
         }
 
-        if (!PENDING_STATUSES.has(detail.status)) {
+        if (!isWorkStage(detail.stage)) {
           stop();
           return;
         }
@@ -183,7 +186,7 @@ export const useScriptStore = defineStore('script', () => {
     }
   }
 
-  /** Re-runs the parser over the stored PDF, e.g. after a failure. */
+  /** Extracts the stored PDF again, e.g. after a failure. */
   async function reparseScript(id: string): Promise<boolean> {
     error.value = null;
 

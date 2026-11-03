@@ -12,7 +12,13 @@ import { scenes } from '../../src/db/schema/scenes.js';
 import { scripts } from '../../src/db/schema/scripts.js';
 import { users } from '../../src/db/schema/users.js';
 import type { QueueRegistry } from '../../src/queue/queues.js';
-import { createFakeQueues, createFakeRedis, type FakeQueues } from './fakes.js';
+import {
+  createFakeExtractionQueue,
+  createFakeQueues,
+  createFakeRedis,
+  type FakeExtractionQueue,
+  type FakeQueues,
+} from './fakes.js';
 
 /**
  * Builds the real Fastify app around a test database and fake infrastructure.
@@ -23,6 +29,8 @@ import { createFakeQueues, createFakeRedis, type FakeQueues } from './fakes.js';
 export interface TestApp {
   app: FastifyInstance;
   queues: FakeQueues;
+  /** What `ScriptProductionFlow` handed to the worker. */
+  extraction: FakeExtractionQueue;
   close(): Promise<void>;
 }
 
@@ -31,11 +39,13 @@ export async function createTestApp(
   options: { redis?: Redis; queues?: QueueRegistry } = {},
 ): Promise<TestApp> {
   const queues = createFakeQueues();
+  const extraction = createFakeExtractionQueue();
 
   const app = await buildApp({
     db,
     redis: options.redis ?? createFakeRedis(),
     queues: options.queues ?? queues.registry,
+    extractionQueue: extraction,
   });
 
   await app.ready();
@@ -43,6 +53,7 @@ export async function createTestApp(
   return {
     app,
     queues,
+    extraction,
     async close(): Promise<void> {
       await app.close();
     },
@@ -83,7 +94,7 @@ export interface SeededScript {
   characterId: string;
 }
 
-/** One parsed script with a scene, a character and a dialogue + direction line. */
+/** One script in review with a scene, a character and a dialogue + direction line. */
 export async function seedParsedScript(
   db: Database,
   options: { userId: string | null; title?: string; sourceFilePath?: string | null },
@@ -94,7 +105,7 @@ export async function seedParsedScript(
       userId: options.userId,
       title: options.title ?? 'Avarul',
       author: 'Molière',
-      status: 'parsed',
+      stage: 'in_review',
       sourceFileName: 'avarul.pdf',
       sourceFilePath: options.sourceFilePath ?? null,
       pageCount: 2,

@@ -35,3 +35,9 @@ export function createDatabase(databaseUrl: string = env.DATABASE_URL) {
 
 /** The Drizzle instance type, used to decorate Fastify and type the services. */
 export type Database = ReturnType<typeof createDatabase>['db'];
+
+/** The handle `db.transaction()` passes to its callback. */
+export type Transaction = Parameters<Parameters<Database['transaction']>[0]>[0];
+
+/** Either the database or an open transaction: what a write helper runs on. */
+export type Executor = Database | Transaction;

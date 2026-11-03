@@ -3,6 +3,8 @@ import type { Script } from '@osvald/shared';
 import { IonBadge, IonItem, IonLabel, IonNote, IonSpinner } from '@ionic/vue';
 import { computed } from 'vue';
 
+import { STAGE_COLORS, STAGE_LABELS } from '@/lib/stage';
+
 /**
  * One row of the script library. Presentation only — navigation is the parent's
  * job, which keeps this component reusable (list, search results, recents).
@@ -12,31 +14,8 @@ const props = defineProps<{ script: Script; isParsing?: boolean }>();
 const emit = defineEmits<{ select: [script: Script] }>();
 
 /** The states that matter to an actor: is it ready to rehearse yet? */
-const statusColor = computed(() => {
-  switch (props.script.status) {
-    case 'parsed':
-      return 'success';
-    case 'failed':
-      return 'danger';
-    case 'parsing':
-      return 'warning';
-    default:
-      return 'medium';
-  }
-});
-
-const statusLabel = computed(() => {
-  switch (props.script.status) {
-    case 'parsed':
-      return 'ready';
-    case 'parsing':
-      return 'reading…';
-    case 'uploaded':
-      return 'queued';
-    default:
-      return props.script.status;
-  }
-});
+const statusColor = computed(() => STAGE_COLORS[props.script.stage]);
+const statusLabel = computed(() => STAGE_LABELS[props.script.stage]);
 
 const subtitle = computed(() => {
   const parts: string[] = [];
@@ -57,7 +36,7 @@ const subtitle = computed(() => {
     <ion-label>
       <h2>{{ script.title }}</h2>
       <p v-if="subtitle.length > 0">{{ subtitle }}</p>
-      <ion-note v-if="script.status === 'failed' && script.parseError !== null" color="danger">
+      <ion-note v-if="script.stage === 'failed' && script.parseError !== null" color="danger">
         {{ script.parseError }}
       </ion-note>
       <ion-note v-else-if="script.sourceFileName !== null">

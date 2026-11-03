@@ -68,6 +68,14 @@ const envSchema = z.object({
   // Queue worker
   SCRIPT_PARSING_WORKER_ENABLED: booleanFromString(),
   SCRIPT_PARSING_CONCURRENCY: z.coerce.number().int().positive().default(2),
+  /** How often the recovery job looks for scripts stuck in a work stage. */
+  SCRIPT_RECOVERY_INTERVAL_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(5 * 60 * 1000),
+  /** How long a run may sit in a work stage before recovery checks its job. */
+  SCRIPT_RECOVERY_GRACE_MS: z.coerce.number().int().positive().default(60_000),
 
   // Reported by GET /health
   APP_VERSION: z.string().min(1).default('0.1.0'),

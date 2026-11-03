@@ -31,7 +31,9 @@ const scriptRow: ScriptRow = {
   title: 'Avarul',
   author: 'Molière',
   description: null,
-  status: 'parsed',
+  stage: 'in_review',
+  stageEnteredAt: updatedAt,
+  runId: '7f5d0f8e-6e1a-4f1e-9b2a-1c2d3e4f5a70',
   sourceFileName: 'avarul.pdf',
   sourceFilePath: '/tmp/avarul.pdf',
   pageCount: 286,
@@ -78,7 +80,7 @@ const characterRow: CharacterRow = {
 };
 
 describe('mapScriptRow', () => {
-  it('converts timestamps and hides the stored file path', () => {
+  it('converts timestamps and hides the stored file path and run id', () => {
     const mapped = mapScriptRow(scriptRow);
 
     expect(mapped).toEqual({
@@ -87,7 +89,8 @@ describe('mapScriptRow', () => {
       title: 'Avarul',
       author: 'Molière',
       description: null,
-      status: 'parsed',
+      stage: 'in_review',
+      stageEnteredAt: '2026-10-18T13:00:00.000Z',
       sourceFileName: 'avarul.pdf',
       pageCount: 286,
       parseError: null,
@@ -95,6 +98,8 @@ describe('mapScriptRow', () => {
       updatedAt: '2026-10-18T13:00:00.000Z',
     });
     expect(mapped).not.toHaveProperty('sourceFilePath');
+    // The run id is how the flow tells job reactions apart; clients never need it.
+    expect(mapped).not.toHaveProperty('runId');
   });
 });
 
@@ -143,7 +148,7 @@ describe('mapCharacterRow', () => {
       aliases: ['HARPAGON'],
       gender: 'male',
       genderSource: 'auto',
-      createdAt:'2026-10-18T12:00:00.000Z',
+      createdAt: '2026-10-18T12:00:00.000Z',
       updatedAt: '2026-10-18T13:00:00.000Z',
     });
   });

@@ -7,11 +7,10 @@ import type {
   Script,
   ScriptDetail,
   ScriptListResponse,
-  ScriptStatus,
 } from '@osvald/shared';
 
 import type { ParsedScript } from '../parsing/script-parser.js';
-import type { Database } from '../db/client.js';
+import type { Database, Executor } from '../db/client.js';
 import { toIsoDateTime } from '../db/mappers.js';
 import { characters, type CharacterRow, type NewCharacterRow } from '../db/schema/characters.js';
 import { lines, type LineRow, type NewLineRow } from '../db/schema/lines.js';
@@ -31,7 +30,8 @@ export function mapScriptRow(row: ScriptRow): Script {
     title: row.title,
     author: row.author,
     description: row.description,
-    status: row.status,
+    stage: row.stage,
+    stageEnteredAt: toIsoDateTime(row.stageEnteredAt),
     sourceFileName: row.sourceFileName,
     pageCount: row.pageCount,
     parseError: row.parseError,
@@ -178,50 +178,32 @@ export async function getScriptRow(
   return row;
 }
 
-export interface CreateUploadedScriptInput {
-  userId: string | null;
-  title: string;
-  author: string | null;
-  description: string | null;
-  sourceFileName: string;
-  /** `null` for scripts imported from already-extracted text (the seed). */
-  sourceFilePath: string | null;
-}
+/** A new script row. Its stage and run come from `ScriptProductionFlow` (or the seed). */
+export type InsertScriptInput = Pick<
+  NewScriptRow,
+  | 'userId'
+  | 'title'
+  | 'author'
+  | 'description'
+  | 'sourceFileName'
+  | 'sourceFilePath'
+  | 'pageCount'
+  | 'stage'
+  | 'stageEnteredAt'
+  | 'runId'
+>;
 
-export async function createUploadedScript(
-  db: Database,
-  input: CreateUploadedScriptInput,
-): Promise<Script> {
-  const values: NewScriptRow = {
-    userId: input.userId,
-    title: input.title,
-    author: input.author,
-    description: input.description,
-    sourceFileName: input.sourceFileName,
-    sourceFilePath: input.sourceFilePath,
-    status: 'uploaded',
-  };
-
-  const [row] = await db.insert(scripts).values(values).returning();
+export async function insertScript(
+  executor: Executor,
+  input: InsertScriptInput,
+): Promise<ScriptRow> {
+  const [row] = await executor.insert(scripts).values(input).returning();
 
   if (row === undefined) {
     throw new Error('Insert into "scripts" returned no row');
   }
 
-  return mapScriptRow(row);
-}
-
-/** Status transitions are driven by the script-parsing worker (`src/queue`). */
-export async function updateScriptStatus(
-  db: Database,
-  scriptId: string,
-  status: ScriptStatus,
-  parseError: string | null = null,
-): Promise<void> {
-  await db
-    .update(scripts)
-    .set({ status, parseError, updatedAt: new Date() })
-    .where(eq(scripts.id, scriptId));
+  return row;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -250,129 +232,110 @@ function chunk<T>(items: T[], size: number): T[][] {
 /**
  * Replaces a script's scenes, characters and lines with a parse result.
  *
- * Everything happens in one transaction, so a script is never left half-parsed:
- * either the whole play lands and the status becomes `parsed`, or nothing
- * changes. Re-parsing is therefore safe to run repeatedly — the delete at the
- * top makes it idempotent (lines and characters go with their scenes/script via
- * `ON DELETE CASCADE`).
+ * Runs on the caller's transaction, so the stage change and the lines land
+ * together (see `ScriptProductionFlow.onExtractionCompleted`): a script is never
+ * left half-parsed. The delete at the top makes it idempotent (lines go with
+ * their scenes via `ON DELETE CASCADE`).
  *
  * A gender the actor set by hand is carried over by character name; every
  * other gender comes from `genderByName`, the classifier's fresh guess.
  */
 export async function saveParseResult(
-  db: Database,
+  tx: Executor,
   scriptId: string,
   parsed: ParsedScript,
-  options: {
-    title?: string;
-    author?: string | null;
-    genderByName?: ReadonlyMap<string, Gender>;
-  } = {},
+  options: { genderByName?: ReadonlyMap<string, Gender> } = {},
 ): Promise<SaveParseResultSummary> {
-  return db.transaction(async (tx) => {
-    const manualGenders = await tx
-      .select({ name: characters.name, gender: characters.gender })
-      .from(characters)
-      .where(and(eq(characters.scriptId, scriptId), eq(characters.genderSource, 'manual')));
-    const manualGenderByName = new Map(manualGenders.map((row) => [row.name, row.gender]));
+  const manualGenders = await tx
+    .select({ name: characters.name, gender: characters.gender })
+    .from(characters)
+    .where(and(eq(characters.scriptId, scriptId), eq(characters.genderSource, 'manual')));
+  const manualGenderByName = new Map(manualGenders.map((row) => [row.name, row.gender]));
 
-    await tx.delete(scenes).where(eq(scenes.scriptId, scriptId));
-    await tx.delete(characters).where(eq(characters.scriptId, scriptId));
+  await tx.delete(scenes).where(eq(scenes.scriptId, scriptId));
+  await tx.delete(characters).where(eq(characters.scriptId, scriptId));
 
-    const characterIdsByName = new Map<string, string>();
+  const characterIdsByName = new Map<string, string>();
 
-    if (parsed.characters.length > 0) {
-      const characterValues: NewCharacterRow[] = parsed.characters.map((character) => {
-        const manual = manualGenderByName.get(character.name);
+  if (parsed.characters.length > 0) {
+    const characterValues: NewCharacterRow[] = parsed.characters.map((character) => {
+      const manual = manualGenderByName.get(character.name);
 
-        return {
-          scriptId,
-          name: character.name,
-          description: character.description,
-          aliases: character.aliases,
-          gender: manual ?? options.genderByName?.get(character.name) ?? 'unknown',
-          genderSource: manual === undefined ? 'auto' : 'manual',
-        };
-      });
+      return {
+        scriptId,
+        name: character.name,
+        description: character.description,
+        aliases: character.aliases,
+        gender: manual ?? options.genderByName?.get(character.name) ?? 'unknown',
+        genderSource: manual === undefined ? 'auto' : 'manual',
+      };
+    });
 
-      const insertedCharacters = await tx
-        .insert(characters)
-        .values(characterValues)
-        .returning({ id: characters.id, name: characters.name });
+    const insertedCharacters = await tx
+      .insert(characters)
+      .values(characterValues)
+      .returning({ id: characters.id, name: characters.name });
 
-      for (const inserted of insertedCharacters) {
-        characterIdsByName.set(inserted.name, inserted.id);
+    for (const inserted of insertedCharacters) {
+      characterIdsByName.set(inserted.name, inserted.id);
+    }
+  }
+
+  const sceneValues: NewSceneRow[] = parsed.scenes.map((scene, orderIndex) => ({
+    scriptId,
+    orderIndex,
+    number: scene.number.slice(0, 64),
+    title: scene.title.slice(0, 300),
+    synopsis: null,
+    pageStart: scene.pageStart,
+    pageEnd: scene.pageEnd,
+  }));
+
+  let lineCount = 0;
+
+  if (sceneValues.length > 0) {
+    const insertedScenes = await tx
+      .insert(scenes)
+      .values(sceneValues)
+      .returning({ id: scenes.id, orderIndex: scenes.orderIndex });
+
+    const sceneIdsByOrder = new Map(insertedScenes.map((scene) => [scene.orderIndex, scene.id]));
+
+    const lineValues: NewLineRow[] = [];
+
+    for (const [sceneIndex, scene] of parsed.scenes.entries()) {
+      const sceneId = sceneIdsByOrder.get(sceneIndex);
+      if (sceneId === undefined) {
+        continue;
+      }
+
+      for (const [orderIndex, line] of scene.lines.entries()) {
+        lineValues.push({
+          sceneId,
+          characterId:
+            line.characterName === null
+              ? null
+              : (characterIdsByName.get(line.characterName) ?? null),
+          orderIndex,
+          type: line.type,
+          speakerLabel: line.speakerLabel,
+          text: line.text,
+        });
       }
     }
 
-    const sceneValues: NewSceneRow[] = parsed.scenes.map((scene, orderIndex) => ({
-      scriptId,
-      orderIndex,
-      number: scene.number.slice(0, 64),
-      title: scene.title.slice(0, 300),
-      synopsis: null,
-      pageStart: scene.pageStart,
-      pageEnd: scene.pageEnd,
-    }));
-
-    let lineCount = 0;
-
-    if (sceneValues.length > 0) {
-      const insertedScenes = await tx
-        .insert(scenes)
-        .values(sceneValues)
-        .returning({ id: scenes.id, orderIndex: scenes.orderIndex });
-
-      const sceneIdsByOrder = new Map(insertedScenes.map((scene) => [scene.orderIndex, scene.id]));
-
-      const lineValues: NewLineRow[] = [];
-
-      for (const [sceneIndex, scene] of parsed.scenes.entries()) {
-        const sceneId = sceneIdsByOrder.get(sceneIndex);
-        if (sceneId === undefined) {
-          continue;
-        }
-
-        for (const [orderIndex, line] of scene.lines.entries()) {
-          lineValues.push({
-            sceneId,
-            characterId:
-              line.characterName === null
-                ? null
-                : (characterIdsByName.get(line.characterName) ?? null),
-            orderIndex,
-            type: line.type,
-            speakerLabel: line.speakerLabel,
-            text: line.text,
-          });
-        }
-      }
-
-      for (const batch of chunk(lineValues, INSERT_CHUNK_SIZE)) {
-        await tx.insert(lines).values(batch);
-      }
-
-      lineCount = lineValues.length;
+    for (const batch of chunk(lineValues, INSERT_CHUNK_SIZE)) {
+      await tx.insert(lines).values(batch);
     }
 
-    await tx
-      .update(scripts)
-      .set({
-        status: 'parsed',
-        parseError: null,
-        pageCount: parsed.stats.pageCount > 0 ? parsed.stats.pageCount : null,
-        ...(options.title !== undefined ? { title: options.title } : {}),
-        ...(options.author !== undefined ? { author: options.author } : {}),
-        updatedAt: new Date(),
-      })
-      .where(eq(scripts.id, scriptId));
+    lineCount = lineValues.length;
+  }
 
-    return {
-      sceneCount: sceneValues.length,
-      characterCount: parsed.characters.length,
-      lineCount,
-    };
-  });
+  return {
+    sceneCount: sceneValues.length,
+    characterCount: parsed.characters.length,
+    lineCount,
+  };
 }
 
 /** Sets a role's gender by hand; `manual` keeps it through every reparse. */
@@ -395,12 +358,6 @@ export async function setCharacterGender(
   return mapCharacterRow(row);
 }
 
-/** Removes a script and everything that hangs off it. */
-export async function deleteScript(db: Database, scriptId: string): Promise<void> {
-  await db.delete(scripts).where(eq(scripts.id, scriptId));
-}
-
 /*
- * TODO(scripts): updateScript (title/author metadata) and a sweep that removes
- * the stored upload file when a script row is deleted.
+ * TODO(scripts): updateScript (title/author metadata).
  */

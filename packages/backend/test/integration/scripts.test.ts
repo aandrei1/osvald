@@ -3,9 +3,10 @@ import { readFile, stat } from 'node:fs/promises';
 import {
   apiErrorSchema,
   characterListResponseSchema,
+  lossSummarySchema,
   scriptDetailSchema,
   scriptListResponseSchema,
-  uploadScriptResponseSchema,
+  stageChangedResponseSchema,
 } from '@osvald/shared';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
@@ -22,9 +23,11 @@ import {
 import { tryCreateTestDatabase } from '../helpers/database.js';
 
 /**
- * Script routes are the upload → parse → rehearse entry point. Uploads stream a
- * real PDF to disk and enqueue a BullMQ job; the worker itself is out of scope
- * here, so the queue registry is faked and the enqueue is asserted.
+ * Script routes are the upload → extract → review entry point. Uploads stream a
+ * real PDF to disk and start the import through `ScriptProductionFlow`; the
+ * worker itself is out of scope here, so the extraction queue is faked and the
+ * handed-off job is asserted. The flow's own rules live in
+ * `script-production-flow.test.ts`.
  */
 
 const database = await tryCreateTestDatabase();
@@ -156,6 +159,34 @@ describe.skipIf(database === null)('scripts routes', () => {
       await test.close();
     }
   });
+
+  it('previews what a delete or a reparse would remove', async () => {
+    const test = await createTestApp(db());
+
+    try {
+      const user = await createTestUser(test.app, db());
+      const seeded = await seedParsedScript(db(), { userId: user.id });
+
+      for (const preview of ['delete-preview', 'reparse-preview']) {
+        const response = await test.app.inject({
+          method: 'GET',
+          url: `/scripts/${seeded.scriptId}/${preview}`,
+          headers: bearer(user.token),
+        });
+
+        expect(response.statusCode).toBe(200);
+        expect(lossSummarySchema.parse(response.json())).toEqual({
+          sceneCount: 1,
+          lineCount: 2,
+          characterCount: 1,
+          editedLineCount: 0,
+          synthesizedCharacterCount: 0,
+        });
+      }
+    } finally {
+      await test.close();
+    }
+  });
   it('returns the cast of one script', async () => {
     const test = await createTestApp(db());
 
@@ -222,7 +253,7 @@ describe.skipIf(database === null)('scripts routes', () => {
     }
   });
 
-  it('stores a PDF, inserts the row and enqueues the parse job', async () => {
+  it('stores a PDF and starts the import in extracting', async () => {
     const test = await createTestApp(db());
 
     try {
@@ -239,25 +270,16 @@ describe.skipIf(database === null)('scripts routes', () => {
 
       expect(response.statusCode).toBe(201);
 
-      const body = uploadScriptResponseSchema.parse(response.json());
-      expect(body.script.status).toBe('uploaded');
+      const body = stageChangedResponseSchema.parse(response.json());
+      expect(body.script.stage).toBe('extracting');
       expect(body.script.title).toBe('avarul excerpt');
       expect(body.script.sourceFileName).toBe('avarul-excerpt.pdf');
-      expect(body.queueName).toBe('script-parsing');
-      expect(body.jobId).toBe(body.script.id);
-
-      expect(test.queues.add).toHaveBeenCalledTimes(1);
-      expect(test.queues.add).toHaveBeenCalledWith(
-        'parse-script',
-        expect.objectContaining({
-          scriptId: body.script.id,
-          mimeType: 'application/pdf',
-          requestedByUserId: user.id,
-        }),
-        { jobId: body.script.id },
-      );
 
       const [row] = await db().select().from(scripts).where(eq(scripts.id, body.script.id));
+      expect(test.extraction.jobs).toEqual([
+        { scriptId: body.script.id, runId: row?.runId, filePath: row?.sourceFilePath },
+      ]);
+
       const storedPath = row?.sourceFilePath;
       expect(storedPath).toBeTruthy();
       if (storedPath === null || storedPath === undefined) {
@@ -270,7 +292,7 @@ describe.skipIf(database === null)('scripts routes', () => {
     }
   });
 
-  it('re-enqueues a stored script for parsing', async () => {
+  it('reparses a stored script under a new run', async () => {
     const test = await createTestApp(db());
 
     try {
@@ -284,10 +306,8 @@ describe.skipIf(database === null)('scripts routes', () => {
         headers: { ...multipart.headers, ...bearer(user.token) },
         payload: multipart.payload,
       });
-      const { script } = uploadScriptResponseSchema.parse(uploaded.json());
-
-      test.queues.add.mockClear();
-      test.queues.remove.mockClear();
+      const { script } = stageChangedResponseSchema.parse(uploaded.json());
+      const firstRun = test.extraction.jobs[0]?.runId;
 
       const response = await test.app.inject({
         method: 'POST',
@@ -297,15 +317,34 @@ describe.skipIf(database === null)('scripts routes', () => {
 
       expect(response.statusCode).toBe(202);
 
-      const body = uploadScriptResponseSchema.parse(response.json());
-      expect(body.script.status).toBe('uploaded');
-      expect(test.queues.remove).toHaveBeenCalledWith(script.id);
-      expect(test.queues.add).toHaveBeenCalledTimes(1);
-      expect(test.queues.add).toHaveBeenCalledWith(
-        'parse-script',
-        expect.objectContaining({ scriptId: script.id }),
-        { jobId: script.id },
-      );
+      const body = stageChangedResponseSchema.parse(response.json());
+      expect(body.script.stage).toBe('extracting');
+
+      expect(test.extraction.jobs).toHaveLength(2);
+      const secondRun = test.extraction.jobs[1];
+      expect(secondRun?.scriptId).toBe(script.id);
+      expect(secondRun?.runId).not.toBe(firstRun);
+    } finally {
+      await test.close();
+    }
+  });
+
+  it('refuses to reparse a script without a stored PDF', async () => {
+    const test = await createTestApp(db());
+
+    try {
+      const user = await createTestUser(test.app, db());
+      const seeded = await seedParsedScript(db(), { userId: user.id, sourceFilePath: null });
+
+      const response = await test.app.inject({
+        method: 'POST',
+        url: `/scripts/${seeded.scriptId}/reparse`,
+        headers: bearer(user.token),
+      });
+
+      expect(response.statusCode).toBe(400);
+      expect(apiErrorSchema.parse(response.json()).message).toMatch(/no stored source file/);
+      expect(test.extraction.jobs).toHaveLength(0);
     } finally {
       await test.close();
     }
