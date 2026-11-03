@@ -112,6 +112,8 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   await app.register(fastifyCors, {
     origin: corsOrigins,
     credentials: true,
+    // @fastify/cors defaults to GET,HEAD,POST, which blocks DELETE/PATCH/PUT preflights.
+    methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   });
 
   await app.register(fastifyMultipart, {
