@@ -26,6 +26,7 @@ import { playCircleOutline, refreshOutline, trashOutline } from 'ionicons/icons'
 import { computed, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
 
+import { describeLoss } from '@/lib/loss-summary';
 import { STAGE_COLORS, STAGE_LABELS } from '@/lib/stage';
 import { useScriptStore } from '@/stores/scriptStore';
 
@@ -71,14 +72,39 @@ function startRehearsal(sceneId?: string): void {
   });
 }
 
-async function reparse(): Promise<void> {
-  await scriptStore.reparseScript(props.id);
+/** Every reparse is confirmed against what it would replace, whatever the stage. */
+async function confirmReparse(): Promise<void> {
+  const summary = await scriptStore.previewLoss(props.id, 'reparse');
+  if (summary === null) {
+    return;
+  }
+
+  const alert = await alertController.create({
+    header: 'Parse the PDF again?',
+    message: describeLoss(summary, 'reparse').join(' '),
+    buttons: [
+      { text: 'Cancel', role: 'cancel' },
+      {
+        text: 'Parse again',
+        handler: () => {
+          void scriptStore.reparseScript(props.id);
+        },
+      },
+    ],
+  });
+
+  await alert.present();
 }
 
 async function confirmDelete(): Promise<void> {
+  const summary = await scriptStore.previewLoss(props.id, 'delete');
+  if (summary === null) {
+    return;
+  }
+
   const alert = await alertController.create({
     header: 'Delete this script?',
-    message: 'Its scenes, characters and lines will be removed. This cannot be undone.',
+    message: [...describeLoss(summary, 'delete'), 'This cannot be undone.'].join(' '),
     buttons: [
       { text: 'Cancel', role: 'cancel' },
       {
@@ -138,7 +164,7 @@ async function confirmDelete(): Promise<void> {
         <div v-else-if="script.stage === 'failed'" class="status-panel status-panel--error">
           <h2>Parsing failed</h2>
           <p>{{ script.parseError ?? 'No further detail was recorded.' }}</p>
-          <ion-button fill="outline" size="small" @click="reparse">
+          <ion-button fill="outline" size="small" @click="confirmReparse">
             <ion-icon slot="start" :icon="refreshOutline" />
             Try again
           </ion-button>
@@ -215,7 +241,7 @@ async function confirmDelete(): Promise<void> {
               v-if="script.sourceFileName !== null && script.description === null"
               fill="clear"
               size="small"
-              @click="reparse"
+              @click="confirmReparse"
             >
               <ion-icon slot="start" :icon="refreshOutline" />
               Parse again

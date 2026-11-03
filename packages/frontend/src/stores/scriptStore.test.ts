@@ -7,6 +7,8 @@ const api = vi.hoisted(() => ({
   getScript: vi.fn(),
   uploadScript: vi.fn(),
   reparseScript: vi.fn(),
+  previewReparse: vi.fn(),
+  previewDelete: vi.fn(),
   deleteScript: vi.fn(),
 }));
 
@@ -40,6 +42,8 @@ beforeEach(() => {
   api.getScript.mockReset();
   api.uploadScript.mockReset();
   api.reparseScript.mockReset();
+  api.previewReparse.mockReset();
+  api.previewDelete.mockReset();
   api.deleteScript.mockReset();
 });
 
@@ -138,6 +142,37 @@ describe('reparseScript', () => {
 
     expect(store.scripts[0]?.stage).toBe('extracting');
     expect(store.parsingIds).toContain(SCRIPT.id);
+  });
+});
+
+describe('previewLoss', () => {
+  const SUMMARY = {
+    sceneCount: 3,
+    lineCount: 120,
+    characterCount: 6,
+    editedLineCount: 0,
+    synthesizedCharacterCount: 0,
+  };
+
+  it('asks the server what a reparse or a delete would remove', async () => {
+    api.previewReparse.mockResolvedValue(SUMMARY);
+    api.previewDelete.mockResolvedValue({ ...SUMMARY, lineCount: 121 });
+
+    const store = useScriptStore();
+
+    await expect(store.previewLoss(SCRIPT.id, 'reparse')).resolves.toEqual(SUMMARY);
+    await expect(store.previewLoss(SCRIPT.id, 'delete')).resolves.toMatchObject({ lineCount: 121 });
+    expect(api.previewReparse).toHaveBeenCalledWith(SCRIPT.id);
+    expect(api.previewDelete).toHaveBeenCalledWith(SCRIPT.id);
+  });
+
+  it('answers null and keeps the error when the summary fails', async () => {
+    api.previewDelete.mockRejectedValue(new Error('Script was not found'));
+
+    const store = useScriptStore();
+
+    await expect(store.previewLoss(SCRIPT.id, 'delete')).resolves.toBeNull();
+    expect(store.error).toBe('Script was not found');
   });
 });
 

@@ -1,6 +1,7 @@
 import {
   isWorkStage,
   type Gender,
+  type LossSummary,
   type Script,
   type ScriptDetail,
 } from '@osvald/shared';
@@ -186,7 +187,25 @@ export const useScriptStore = defineStore('script', () => {
     }
   }
 
-  /** Extracts the stored PDF again, e.g. after a failure. */
+  /**
+   * What a reparse or a delete would throw away, for the confirmation dialog.
+   * `null` when the summary could not be loaded (the error is set).
+   */
+  async function previewLoss(
+    id: string,
+    action: 'reparse' | 'delete',
+  ): Promise<LossSummary | null> {
+    error.value = null;
+
+    try {
+      return action === 'reparse' ? await api.previewReparse(id) : await api.previewDelete(id);
+    } catch (caught) {
+      error.value = toErrorMessage(caught);
+      return null;
+    }
+  }
+
+  /** Extracts the stored PDF again, e.g. after a failure. Confirm with `previewLoss` first. */
   async function reparseScript(id: string): Promise<boolean> {
     error.value = null;
 
@@ -286,6 +305,7 @@ export const useScriptStore = defineStore('script', () => {
     fetchScripts,
     fetchScriptDetail,
     uploadScript,
+    previewLoss,
     reparseScript,
     setCharacterGender,
     deleteScript,

@@ -8,6 +8,7 @@ import {
   noContentSchema,
   registerBodySchema,
   scriptDetailSchema,
+  lossSummarySchema,
   scriptListResponseSchema,
   stageChangedResponseSchema,
   ttsVoicesResponseSchema,
@@ -24,6 +25,7 @@ import {
   type SynthesizeSpeechBody,
   type TtsVoicesResponse,
   type UpdateCharacterBody,
+  type LossSummary,
   type StageChangedResponse,
   type ZodType,
 } from '@osvald/shared';
@@ -342,11 +344,21 @@ export const api = {
     });
   },
 
+  /** What a reparse would replace, shown before the editor confirms. */
+  previewReparse(id: string): Promise<LossSummary> {
+    return request(`/scripts/${encodeURIComponent(id)}/reparse-preview`, lossSummarySchema);
+  },
+
   /** Extracts the stored PDF again, under a new run. */
   reparseScript(id: string): Promise<StageChangedResponse> {
     return request(`/scripts/${encodeURIComponent(id)}/reparse`, stageChangedResponseSchema, {
       method: 'POST',
     });
+  },
+
+  /** What deleting would remove, shown before the editor confirms. */
+  previewDelete(id: string): Promise<LossSummary> {
+    return request(`/scripts/${encodeURIComponent(id)}/delete-preview`, lossSummarySchema);
   },
 
   /** Marks the gender `manual`, so a reparse keeps it. */
