@@ -2,6 +2,7 @@ import {
   apiErrorSchema,
   authResponseSchema,
   characterListResponseSchema,
+  characterSchema,
   healthResponseSchema,
   meResponseSchema,
   noContentSchema,
@@ -11,7 +12,9 @@ import {
   ttsVoicesResponseSchema,
   uploadScriptResponseSchema,
   type AuthResponse,
+  type Character,
   type CharacterListResponse,
+  type Gender,
   type HealthResponse,
   type LoginBody,
   type MeResponse,
@@ -20,6 +23,7 @@ import {
   type ScriptListResponse,
   type SynthesizeSpeechBody,
   type TtsVoicesResponse,
+  type UpdateCharacterBody,
   type UploadScriptResponse,
   type ZodType,
 } from '@osvald/shared';
@@ -342,6 +346,15 @@ export const api = {
     return request(`/scripts/${encodeURIComponent(id)}/reparse`, uploadScriptResponseSchema, {
       method: 'POST',
     });
+  },
+
+  /** Marks the gender `manual`, so a reparse keeps it. */
+  setCharacterGender(scriptId: string, characterId: string, gender: Gender): Promise<Character> {
+    return request(
+      `/scripts/${encodeURIComponent(scriptId)}/characters/${encodeURIComponent(characterId)}`,
+      characterSchema,
+      { method: 'PATCH', body: { gender } satisfies UpdateCharacterBody },
+    );
   },
 
   deleteScript(id: string): Promise<null> {

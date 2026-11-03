@@ -1,4 +1,4 @@
-import type { Character, Line, SceneWithLines } from '@osvald/shared';
+import type { Character, Gender, Line, SceneWithLines } from '@osvald/shared';
 import { describe, expect, it } from 'vitest';
 
 import type { SpeechVoice } from './speech';
@@ -49,20 +49,22 @@ function scene(lines: Line[]): SceneWithLines {
   };
 }
 
-function character(id: string): Character {
+function character(id: string, gender: Gender = 'unknown'): Character {
   return {
     id,
     scriptId: 'script-1',
     name: id,
     description: null,
     aliases: [],
+    gender,
+    genderSource: 'auto',
     createdAt: ISO,
     updatedAt: ISO,
   };
 }
 
-function voice(id: string, lang: string, isDefault = false): SpeechVoice {
-  return { id, name: id, lang, isDefault, source: 'server' };
+function voice(id: string, lang: string, isDefault = false, gender: Gender = 'unknown'): SpeechVoice {
+  return { id, name: id, lang, isDefault, source: 'server', gender };
 }
 
 describe('detectScriptLanguage', () => {
@@ -172,7 +174,25 @@ describe('assignVoicesForNewCharacters', () => {
       { a: 'ro:amy' },
     );
 
-    expect(result).toEqual({ b: 'ro:mihai', c: 'ro:amy' });
+    // `ro:amy` is taken, so the first new role gets the idle voice.
+    expect(result).toEqual({ b: 'ro:mihai', c: 'ro:mihai' });
+  });
+
+  it('casts women and men from voices of their own gender', () => {
+    const cast = [
+      voice('ro:mihai', 'ro-RO', false, 'male'),
+      voice('ro:radu', 'ro-RO', false, 'male'),
+      voice('ro:ana', 'ro-RO', false, 'female'),
+    ];
+
+    expect(
+      assignVoicesForNewCharacters(
+        [character('veta', 'female'), character('chiriac', 'male'), character('zita', 'female')],
+        cast,
+        'ro',
+        { dumitrache: 'ro:mihai' },
+      ),
+    ).toEqual({ veta: 'ro:ana', chiriac: 'ro:radu', zita: 'ro:ana' });
   });
 
   it('returns nothing when every character already has a voice', () => {

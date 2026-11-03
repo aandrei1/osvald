@@ -56,6 +56,11 @@ export const idParamsSchema = z.object({
 });
 export type IdParams = z.infer<typeof idParamsSchema>;
 
+/** Shared by voices and characters, so a voice can be matched to a role. */
+export const GENDERS = ['male', 'female', 'unknown'] as const;
+export const genderSchema = z.enum(GENDERS);
+export type Gender = z.infer<typeof genderSchema>;
+
 /**
  * Body of a `204 No Content` response.
  *

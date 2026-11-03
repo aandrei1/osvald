@@ -5,6 +5,7 @@ import { Worker, type Job } from 'bullmq';
 import { env } from '../config/env.js';
 import { createDatabase } from '../db/client.js';
 import { createConsoleLogger, type Logger } from '../lib/logger.js';
+import { RuleBasedGenderClassifier } from '../parsing/gender/gender-classifier.js';
 import { createOcrClient } from '../services/ocr.client.js';
 import { redisConnectionOptions } from './connection.js';
 import {
@@ -32,11 +33,12 @@ export interface ScriptParsingWorkerHandle {
 export function createScriptParsingWorker(logger: Logger): ScriptParsingWorkerHandle {
   const database = createDatabase();
   const ocr = createOcrClient();
+  const genders = new RuleBasedGenderClassifier();
 
   const worker = new Worker<ScriptParsingJobData, ScriptParsingJobResult>(
     SCRIPT_PARSING_QUEUE,
     (job: Job<ScriptParsingJobData, ScriptParsingJobResult>) =>
-      processScriptParsingJob(job, { db: database.db, logger, ocr }),
+      processScriptParsingJob(job, { db: database.db, logger, ocr, genders }),
     {
       connection: redisConnectionOptions(),
       concurrency: env.SCRIPT_PARSING_CONCURRENCY,

@@ -6,6 +6,7 @@ import {
   speechTagFor,
   voiceSpeaks,
   voicesForLanguage,
+  type CastMember,
   type SpeechVoice,
 } from './speech';
 
@@ -20,8 +21,13 @@ function voice(overrides: Partial<SpeechVoice> & Pick<SpeechVoice, 'id' | 'lang'
     name: overrides.id,
     isDefault: false,
     source: 'server',
+    gender: 'unknown',
     ...overrides,
   };
+}
+
+function cast(...ids: string[]): CastMember[] {
+  return ids.map((id) => ({ id, gender: 'unknown' }));
 }
 
 const voices: SpeechVoice[] = [
@@ -85,14 +91,14 @@ describe('pickVoiceForLanguage', () => {
 
 describe('assignVoices', () => {
   it('gives each role a different voice where the engine has enough', () => {
-    expect(assignVoices(['a', 'b'], voices, 'ro')).toEqual({
+    expect(assignVoices(cast('a', 'b'), voices, 'ro')).toEqual({
       a: 'piper:mihai',
       b: 'piper:amy',
     });
   });
 
   it('round-robins when there are fewer voices than roles', () => {
-    expect(assignVoices(['a', 'b', 'c'], voices, 'ro')).toEqual({
+    expect(assignVoices(cast('a', 'b', 'c'), voices, 'ro')).toEqual({
       a: 'piper:mihai',
       b: 'piper:amy',
       c: 'piper:mihai',
@@ -102,11 +108,29 @@ describe('assignVoices', () => {
   it('leaves every character unassigned when the language has no voice', () => {
     // Pinning an English voice would force the wrong phonetics; an unassigned
     // character still gets spoken with the right language tag.
-    expect(assignVoices(['a', 'b'], voices, 'ro')).not.toEqual({});
-    expect(assignVoices(['a', 'b'], [voice({ id: 'en', lang: 'en-US' })], 'ro')).toEqual({});
+    expect(assignVoices(cast('a', 'b'), voices, 'ro')).not.toEqual({});
+    expect(assignVoices(cast('a', 'b'), [voice({ id: 'en', lang: 'en-US' })], 'ro')).toEqual({});
   });
 
   it('handles an empty cast', () => {
     expect(assignVoices([], voices, 'ro')).toEqual({});
+  });
+
+  it('falls back to any voice of the language when none matches the gender', () => {
+    // Romanian has no female offline voice yet; a woman still gets read.
+    const men = [
+      voice({ id: 'piper:mihai', lang: 'ro-RO', gender: 'male' }),
+      voice({ id: 'mms:radu', lang: 'ro-RO', gender: 'male' }),
+    ];
+
+    expect(assignVoices([{ id: 'veta', gender: 'female' }], men, 'ro')).toEqual({
+      veta: 'piper:mihai',
+    });
+  });
+
+  it('prefers the voice the existing cast uses least', () => {
+    expect(assignVoices(cast('b'), voices, 'ro', { a: 'piper:mihai' })).toEqual({
+      b: 'piper:amy',
+    });
   });
 });

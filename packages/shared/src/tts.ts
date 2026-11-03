@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { genderSchema } from './common.js';
 import { supportedLanguageSchema } from './language.js';
 
 /**
@@ -16,15 +17,12 @@ import { supportedLanguageSchema } from './language.js';
  * per line instead of one per line and speed.
  */
 
-export const ttsGenderSchema = z.enum(['male', 'female', 'unknown']);
-export type TtsGender = z.infer<typeof ttsGenderSchema>;
-
 export const ttsVoiceSchema = z.object({
   /** `<provider>:<voice>`, stable across restarts — stored per character. */
   id: z.string().min(1),
   name: z.string().min(1),
   language: supportedLanguageSchema,
-  gender: ttsGenderSchema,
+  gender: genderSchema,
   /** Which engine produces this voice, for the settings UI and for debugging. */
   provider: z.string().min(1),
 });

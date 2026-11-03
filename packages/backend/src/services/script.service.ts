@@ -1,6 +1,7 @@
 import { and, desc, eq, isNull, or, type SQL } from 'drizzle-orm';
 import type {
   Character,
+  Gender,
   Line,
   SceneWithLines,
   Script,
@@ -76,6 +77,8 @@ export function mapCharacterRow(row: CharacterRow): Character {
     name: row.name,
     description: row.description,
     aliases: row.aliases,
+    gender: row.gender,
+    genderSource: row.genderSource,
     createdAt: toIsoDateTime(row.createdAt),
     updatedAt: toIsoDateTime(row.updatedAt),
   };
@@ -252,26 +255,45 @@ function chunk<T>(items: T[], size: number): T[][] {
  * changes. Re-parsing is therefore safe to run repeatedly — the delete at the
  * top makes it idempotent (lines and characters go with their scenes/script via
  * `ON DELETE CASCADE`).
+ *
+ * A gender the actor set by hand is carried over by character name; every
+ * other gender comes from `genderByName`, the classifier's fresh guess.
  */
 export async function saveParseResult(
   db: Database,
   scriptId: string,
   parsed: ParsedScript,
-  options: { title?: string; author?: string | null } = {},
+  options: {
+    title?: string;
+    author?: string | null;
+    genderByName?: ReadonlyMap<string, Gender>;
+  } = {},
 ): Promise<SaveParseResultSummary> {
   return db.transaction(async (tx) => {
+    const manualGenders = await tx
+      .select({ name: characters.name, gender: characters.gender })
+      .from(characters)
+      .where(and(eq(characters.scriptId, scriptId), eq(characters.genderSource, 'manual')));
+    const manualGenderByName = new Map(manualGenders.map((row) => [row.name, row.gender]));
+
     await tx.delete(scenes).where(eq(scenes.scriptId, scriptId));
     await tx.delete(characters).where(eq(characters.scriptId, scriptId));
 
     const characterIdsByName = new Map<string, string>();
 
     if (parsed.characters.length > 0) {
-      const characterValues: NewCharacterRow[] = parsed.characters.map((character) => ({
-        scriptId,
-        name: character.name,
-        description: character.description,
-        aliases: character.aliases,
-      }));
+      const characterValues: NewCharacterRow[] = parsed.characters.map((character) => {
+        const manual = manualGenderByName.get(character.name);
+
+        return {
+          scriptId,
+          name: character.name,
+          description: character.description,
+          aliases: character.aliases,
+          gender: manual ?? options.genderByName?.get(character.name) ?? 'unknown',
+          genderSource: manual === undefined ? 'auto' : 'manual',
+        };
+      });
 
       const insertedCharacters = await tx
         .insert(characters)
@@ -351,6 +373,26 @@ export async function saveParseResult(
       lineCount,
     };
   });
+}
+
+/** Sets a role's gender by hand; `manual` keeps it through every reparse. */
+export async function setCharacterGender(
+  db: Database,
+  scriptId: string,
+  characterId: string,
+  gender: Gender,
+): Promise<Character> {
+  const [row] = await db
+    .update(characters)
+    .set({ gender, genderSource: 'manual', updatedAt: new Date() })
+    .where(and(eq(characters.id, characterId), eq(characters.scriptId, scriptId)))
+    .returning();
+
+  if (row === undefined) {
+    throw new NotFoundError('Character', characterId);
+  }
+
+  return mapCharacterRow(row);
 }
 
 /** Removes a script and everything that hangs off it. */

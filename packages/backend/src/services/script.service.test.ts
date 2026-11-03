@@ -71,6 +71,8 @@ const characterRow: CharacterRow = {
   name: 'Harpagon',
   description: 'tatăl lui Cléante și al Élisei.',
   aliases: ['HARPAGON'],
+  gender: 'male',
+  genderSource: 'auto',
   createdAt,
   updatedAt,
 };
@@ -139,7 +141,9 @@ describe('mapCharacterRow', () => {
       name: 'Harpagon',
       description: 'tatăl lui Cléante și al Élisei.',
       aliases: ['HARPAGON'],
-      createdAt: '2026-10-18T12:00:00.000Z',
+      gender: 'male',
+      genderSource: 'auto',
+      createdAt:'2026-10-18T12:00:00.000Z',
       updatedAt: '2026-10-18T13:00:00.000Z',
     });
   });

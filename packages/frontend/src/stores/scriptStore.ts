@@ -1,4 +1,4 @@
-import type { Script, ScriptDetail } from '@osvald/shared';
+import type { Gender, Script, ScriptDetail } from '@osvald/shared';
 import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
 
@@ -198,6 +198,34 @@ export const useScriptStore = defineStore('script', () => {
     }
   }
 
+  /** Corrects a role's gender in the open script. */
+  async function setCharacterGender(characterId: string, gender: Gender): Promise<boolean> {
+    const script = currentScript.value;
+    if (script === null) {
+      return false;
+    }
+
+    error.value = null;
+
+    try {
+      const updated = await api.setCharacterGender(script.id, characterId, gender);
+
+      if (currentScript.value?.id === script.id) {
+        currentScript.value = {
+          ...currentScript.value,
+          characters: currentScript.value.characters.map((character) =>
+            character.id === updated.id ? updated : character,
+          ),
+        };
+      }
+
+      return true;
+    } catch (caught) {
+      error.value = toErrorMessage(caught);
+      return false;
+    }
+  }
+
   async function deleteScript(id: string): Promise<boolean> {
     error.value = null;
 
@@ -256,6 +284,7 @@ export const useScriptStore = defineStore('script', () => {
     fetchScriptDetail,
     uploadScript,
     reparseScript,
+    setCharacterGender,
     deleteScript,
     refreshCurrentScript,
     watchParsing,

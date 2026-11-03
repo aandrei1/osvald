@@ -1,7 +1,11 @@
+import { GENDER_SOURCES, GENDERS } from '@osvald/shared';
 import { sql } from 'drizzle-orm';
-import { pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { pgEnum, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 
 import { scripts } from './scripts.js';
+
+export const genderEnum = pgEnum('gender', GENDERS);
+export const genderSourceEnum = pgEnum('gender_source', GENDER_SOURCES);
 
 export const characters = pgTable(
   'characters',
@@ -19,6 +23,8 @@ export const characters = pgTable(
       .array()
       .notNull()
       .default(sql`ARRAY[]::text[]`),
+    gender: genderEnum('gender').notNull().default('unknown'),
+    genderSource: genderSourceEnum('gender_source').notNull().default('auto'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },

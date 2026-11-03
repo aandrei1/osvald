@@ -43,6 +43,8 @@ function character(id: string): Character {
     name: id.toUpperCase(),
     description: null,
     aliases: [],
+    gender: 'unknown',
+    genderSource: 'auto',
     createdAt: ISO,
     updatedAt: ISO,
   };

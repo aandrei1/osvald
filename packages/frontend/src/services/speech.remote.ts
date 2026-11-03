@@ -89,6 +89,7 @@ export class RemoteSpeechService implements SpeechService {
         lang: BCP47_BY_LANGUAGE[voice.language],
         isDefault: false,
         source: 'server',
+        gender: voice.gender,
       }));
     } catch {
       // No server: fall back to whatever this device has, so the rehearsal

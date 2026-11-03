@@ -1,5 +1,5 @@
 import { Capacitor } from '@capacitor/core';
-import { BCP47_BY_LANGUAGE, type SupportedLanguage } from '@osvald/shared';
+import { BCP47_BY_LANGUAGE, type Gender, type SupportedLanguage } from '@osvald/shared';
 
 import { NativeSpeechService } from './speech.native';
 import { RemoteSpeechService } from './speech.remote';
@@ -39,6 +39,14 @@ export interface SpeechVoice {
    * machine — and on a machine with no Romanian voice, wrong.
    */
   source: 'server' | 'device';
+  /** Device engines do not report one, so their voices are `unknown`. */
+  gender: Gender;
+}
+
+/** What voice casting needs to know about a role. */
+export interface CastMember {
+  id: string;
+  gender: Gender;
 }
 
 export interface SpeakRequest {
@@ -183,11 +191,17 @@ export function pickVoiceForLanguage(
  * it can with it — whereas pinning an English voice would force the wrong
  * phonetics and there would be no way to tell afterwards that it was a
  * fallback rather than a choice.
+ *
+ * A role with a known gender is cast from voices of that gender when the
+ * language has any, and from the whole pool otherwise. Within that, the least
+ * used voice wins, counting `existing` assignments, so a newly cast role does
+ * not double up on a voice while another one sits idle.
  */
 export function assignVoices(
-  characterIds: string[],
+  cast: readonly CastMember[],
   voices: SpeechVoice[],
   language: SupportedLanguage,
+  existing: Readonly<Record<string, string>> = {},
 ): Record<string, string> {
   const pool = voicesForLanguage(voices, language);
 
@@ -195,13 +209,33 @@ export function assignVoices(
     return {};
   }
 
+  const pools: Record<Gender, SpeechVoice[]> = {
+    male: pool.filter((voice) => voice.gender === 'male'),
+    female: pool.filter((voice) => voice.gender === 'female'),
+    unknown: pool,
+  };
+
+  const uses = new Map<string, number>();
+  for (const voiceId of Object.values(existing)) {
+    uses.set(voiceId, (uses.get(voiceId) ?? 0) + 1);
+  }
+
   const assignment: Record<string, string> = {};
 
-  for (const [index, characterId] of characterIds.entries()) {
-    // Round-robin: with fewer voices than roles some sharing is unavoidable.
-    const voice = pool[index % pool.length];
-    if (voice !== undefined) {
-      assignment[characterId] = voice.id;
+  for (const member of cast) {
+    const matching = pools[member.gender];
+    const candidates = matching.length > 0 ? matching : pool;
+
+    let chosen: SpeechVoice | undefined;
+    for (const voice of candidates) {
+      if (chosen === undefined || (uses.get(voice.id) ?? 0) < (uses.get(chosen.id) ?? 0)) {
+        chosen = voice;
+      }
+    }
+
+    if (chosen !== undefined) {
+      assignment[member.id] = chosen.id;
+      uses.set(chosen.id, (uses.get(chosen.id) ?? 0) + 1);
     }
   }
 

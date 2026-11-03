@@ -43,6 +43,8 @@ function character(id: string, name: string): Character {
     name,
     description: null,
     aliases: [],
+    gender: 'unknown',
+    genderSource: 'auto',
     createdAt: ISO,
     updatedAt: ISO,
   };

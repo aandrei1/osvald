@@ -7,6 +7,7 @@ import { z } from 'zod';
 import { env } from '../../config/env.js';
 import type { Database } from '../../db/client.js';
 import type { Logger } from '../../lib/logger.js';
+import type { GenderClassifier } from '../../parsing/gender/gender-classifier.js';
 import { parseScriptText } from '../../parsing/script-parser.js';
 import {
   OcrServiceError,
@@ -42,6 +43,7 @@ export interface ScriptParsingContext {
   db: Database;
   logger: Logger;
   ocr: OcrClient;
+  genders: GenderClassifier;
 }
 
 /** Progress milestones, so the UI can show more than a spinner. */
@@ -139,7 +141,11 @@ export async function processScriptParsingJob(
       throw new UnrecoverableError(describeEmptyResult(extraction));
     }
 
-    const summary = await saveParseResult(ctx.db, data.scriptId, parsed);
+    const genderByName = new Map(
+      parsed.characters.map((character) => [character.name, ctx.genders.classify(character)]),
+    );
+
+    const summary = await saveParseResult(ctx.db, data.scriptId, parsed, { genderByName });
     await job.updateProgress(PROGRESS.saved);
 
     ctx.logger.info(

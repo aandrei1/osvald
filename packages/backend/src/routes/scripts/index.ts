@@ -8,11 +8,14 @@ import type { MultipartFile } from '@fastify/multipart';
 import {
   apiErrorSchema,
   characterListResponseSchema,
+  characterParamsSchema,
+  characterSchema,
   idParamsSchema,
   noContentSchema,
   paginationQuerySchema,
   scriptDetailSchema,
   scriptListResponseSchema,
+  updateCharacterBodySchema,
   uploadScriptResponseSchema,
 } from '@osvald/shared';
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
@@ -27,6 +30,7 @@ import {
   getScriptRow,
   listScripts,
   mapScriptRow,
+  setCharacterGender,
 } from '../../services/script.service.js';
 
 /**
@@ -145,6 +149,32 @@ export const scriptRoutes: FastifyPluginAsyncZod = async (app, _opts) => {
     async (request) => {
       const script = await getScriptDetail(app.db, request.params.id, request.user.sub);
       return { items: script.characters };
+    },
+  );
+
+  app.patch(
+    '/:id/characters/:characterId',
+    {
+      schema: {
+        tags: ['scripts'],
+        summary: "Correct a character's gender",
+        description:
+          'Overrides the detected gender. The value is kept when the script is parsed again.',
+        security: [{ bearerAuth: [] }],
+        params: characterParamsSchema,
+        body: updateCharacterBodySchema,
+        response: {
+          200: characterSchema,
+          400: apiErrorSchema,
+          401: apiErrorSchema,
+          404: apiErrorSchema,
+        },
+      },
+    },
+    async (request) => {
+      // Ownership check first: a character id alone must not reach another user's script.
+      const script = await getScriptRow(app.db, request.params.id, request.user.sub);
+      return setCharacterGender(app.db, script.id, request.params.characterId, request.body.gender);
     },
   );
 

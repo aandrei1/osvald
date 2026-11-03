@@ -1,5 +1,6 @@
 import {
   type Character,
+  type Gender,
   type Line,
   type SceneWithLines,
   type SupportedLanguage,
@@ -10,7 +11,12 @@ import { computed, ref } from 'vue';
 import { buildCue } from '@/lib/cue';
 import { buildCharacterNames, countLinesByCharacter } from '@/lib/script';
 import { toErrorMessage } from '@/services/api';
-import { getSpeechService, voicesForLanguage, type SpeechVoice } from '@/services/speech';
+import {
+  assignVoices,
+  getSpeechService,
+  voicesForLanguage,
+  type SpeechVoice,
+} from '@/services/speech';
 import {
   assignVoicesForNewCharacters,
   detectScriptLanguage,
@@ -280,6 +286,24 @@ export const useRehearsalStore = defineStore('rehearsal', () => {
 
   function setVoiceForCharacter(characterId: string, voiceId: string): void {
     voiceByCharacterId.value = { ...voiceByCharacterId.value, [characterId]: voiceId };
+  }
+
+  /**
+   * Corrects a role's gender and recasts its voice to match.
+   *
+   * The voice is replaced even if it was picked by hand: changing the gender
+   * is the actor saying the current voice is the wrong kind.
+   */
+  async function setCharacterGender(characterId: string, gender: Gender): Promise<void> {
+    const ok = await scriptStore.setCharacterGender(characterId, gender);
+    if (!ok) {
+      error.value = scriptStore.error;
+      return;
+    }
+
+    const { [characterId]: _previous, ...others } = voiceByCharacterId.value;
+    const recast = assignVoices([{ id: characterId, gender }], voices.value, language.value, others);
+    voiceByCharacterId.value = { ...others, ...recast };
   }
 
   /**
@@ -671,6 +695,7 @@ export const useRehearsalStore = defineStore('rehearsal', () => {
     loadVoices,
     setLanguage,
     setVoiceForCharacter,
+    setCharacterGender,
     chooseCharacter,
     jumpToMyFirstScene,
     setScope,

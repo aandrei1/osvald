@@ -93,9 +93,9 @@ export function assignVoicesForNewCharacters(
   language: SupportedLanguage,
   voiceByCharacterId: Record<string, string>,
 ): Record<string, string> {
-  const unassigned = characters
-    .map((character) => character.id)
-    .filter((id) => voiceByCharacterId[id] === undefined);
+  const unassigned = characters.filter((character) => voiceByCharacterId[character.id] === undefined);
 
-  return unassigned.length === 0 ? {} : assignVoices(unassigned, voices, language);
+  return unassigned.length === 0
+    ? {}
+    : assignVoices(unassigned, voices, language, voiceByCharacterId);
 }

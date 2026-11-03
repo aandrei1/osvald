@@ -181,6 +181,7 @@ function toSpeechVoice(voice: SpeechSynthesisVoice): SpeechVoice {
     lang: voice.lang,
     isDefault: voice.default,
     source: 'device',
+    gender: 'unknown',
   };
 }
 

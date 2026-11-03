@@ -32,12 +32,19 @@ import {
   settingsOutline,
   volumeHighOutline,
 } from 'ionicons/icons';
-import { LANGUAGE_LABELS, supportedLanguageSchema, type SupportedLanguage } from '@osvald/shared';
+import {
+  GENDERS,
+  LANGUAGE_LABELS,
+  supportedLanguageSchema,
+  type Gender,
+  type SupportedLanguage,
+} from '@osvald/shared';
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 
 import LineRow from '@/components/LineRow.vue';
 import { buildCue } from '@/lib/cue';
+import type { SpeechVoice } from '@/services/speech';
 import { useRehearsalStore } from '@/stores/rehearsalStore';
 import { useScriptStore } from '@/stores/scriptStore';
 
@@ -117,6 +124,19 @@ function onRateChange(
 }
 
 const languageOptions = supportedLanguageSchema.options;
+
+const genderOptions = GENDERS;
+const GENDER_LABELS: Record<Gender, string> = {
+  female: 'Female',
+  male: 'Male',
+  unknown: 'Unknown',
+};
+
+function voiceLabel(voice: SpeechVoice): string {
+  const details = voice.gender === 'unknown' ? voice.lang : `${voice.lang}, ${voice.gender}`;
+  const source = voice.source === 'server' ? 'server' : 'this device';
+  return `${voice.name} (${details}) · ${source}`;
+}
 
 /**
  * Voices for the script's language first.
@@ -472,8 +492,20 @@ const scenePosition = computed(() =>
               @ion-change="rehearsal.setVoiceForCharacter(character.id, $event.detail.value)"
             >
               <ion-select-option v-for="voice in pickableVoices" :key="voice.id" :value="voice.id">
-                {{ voice.name }} ({{ voice.lang }}) ·
-                {{ voice.source === 'server' ? 'server' : 'this device' }}
+                {{ voiceLabel(voice) }}
+              </ion-select-option>
+            </ion-select>
+            <ion-select
+              class="gender-select"
+              :value="character.gender"
+              label="Gender"
+              label-placement="stacked"
+              interface="popover"
+              :aria-label="`Gender of ${character.name}`"
+              @ion-change="rehearsal.setCharacterGender(character.id, $event.detail.value)"
+            >
+              <ion-select-option v-for="option in genderOptions" :key="option" :value="option">
+                {{ GENDER_LABELS[option] }}
               </ion-select-option>
             </ion-select>
           </ion-item>
@@ -493,6 +525,11 @@ const scenePosition = computed(() =>
 .pad {
   display: block;
   padding: 1rem 1.5rem;
+}
+
+.gender-select {
+  flex: 0 0 7.5rem;
+  margin-left: 0.75rem;
 }
 
 .intro {
