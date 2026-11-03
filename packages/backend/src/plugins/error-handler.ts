@@ -9,6 +9,7 @@ import { isProduction } from '../config/env.js';
 import {
   BadRequestError,
   ConflictError,
+  ForbiddenError,
   NotFoundError,
   NotImplementedError,
   UnauthorizedError,
@@ -44,6 +45,9 @@ function toStatusAndMessage(error: unknown): { statusCode: number; message: stri
   }
   if (error instanceof UnauthorizedError) {
     return { statusCode: 401, message: error.message };
+  }
+  if (error instanceof ForbiddenError) {
+    return { statusCode: 403, message: error.message };
   }
   if (error instanceof NotFoundError) {
     return { statusCode: 404, message: error.message };

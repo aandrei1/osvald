@@ -6,6 +6,7 @@ import type { Database } from '../db/client.js';
 import { toIsoDateTime } from '../db/mappers.js';
 import { users, type NewUserRow, type UserRow } from '../db/schema/users.js';
 import { ConflictError, UnauthorizedError } from '../lib/errors.js';
+import { createWorkspace, personalWorkspaceName } from './workspace.service.js';
 
 /**
  * Accounts and credentials.
@@ -67,7 +68,8 @@ export interface RegisterUserInput {
 }
 
 /**
- * Creates an account.
+ * Creates an account and, in the same transaction, its personal workspace, in
+ * which the new user is the editor.
  *
  * The unique index on `email` is the authority on duplicates rather than a
  * preceding SELECT: two concurrent registrations would both pass the check and
@@ -81,13 +83,21 @@ export async function registerUser(db: Database, input: RegisterUserInput): Prom
   };
 
   try {
-    const [row] = await db.insert(users).values(values).returning();
+    return await db.transaction(async (tx) => {
+      const [row] = await tx.insert(users).values(values).returning();
 
-    if (row === undefined) {
-      throw new Error('Insert into "users" returned no row');
-    }
+      if (row === undefined) {
+        throw new Error('Insert into "users" returned no row');
+      }
 
-    return row;
+      await createWorkspace(tx, {
+        name: personalWorkspaceName(row),
+        editorId: row.id,
+        now: row.createdAt,
+      });
+
+      return row;
+    });
   } catch (error) {
     if (isUniqueViolation(error)) {
       throw new ConflictError('An account with that e-mail address already exists');

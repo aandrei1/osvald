@@ -18,6 +18,7 @@ import {
 
 const validScript = {
   id: '7f5d0f8e-6e1a-4f1e-9b2a-1c2d3e4f5a6b',
+  workspaceId: '0b6f2a52-3c1d-4e5f-8a9b-0c1d2e3f4a5b',
   userId: null,
   title: 'Avarul',
   author: 'Molière',

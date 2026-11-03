@@ -83,6 +83,7 @@ function scene(id: string, orderIndex: number, lines: Line[]): SceneWithLines {
 /** Two scenes; `cleante` appears only in the second. */
 const SCRIPT: ScriptDetail = {
   id: 'script-1',
+  workspaceId: 'workspace-1',
   userId: 'user-1',
   title: 'Avarul',
   author: 'Molière',

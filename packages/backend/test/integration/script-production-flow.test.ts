@@ -1,12 +1,11 @@
-import { randomUUID } from 'node:crypto';
-
 import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Database } from '../../src/db/client.js';
+import { characters } from '../../src/db/schema/characters.js';
 import { scenes } from '../../src/db/schema/scenes.js';
 import { scripts } from '../../src/db/schema/scripts.js';
-import { users } from '../../src/db/schema/users.js';
+import { workspaceMembers } from '../../src/db/schema/workspaces.js';
 import {
   ScriptProductionFlow,
   StageConflictError,
@@ -14,11 +13,11 @@ import {
   type ExtractionResult,
   type RunRef,
 } from '../../src/flows/script-production-flow.js';
-import { NotFoundError } from '../../src/lib/errors.js';
+import { ForbiddenError, NotFoundError } from '../../src/lib/errors.js';
 import type { Logger } from '../../src/lib/logger.js';
 import { parseScriptText } from '../../src/parsing/script-parser.js';
 import { createFakeClock, createFakeExtractionQueue } from '../helpers/fakes.js';
-import { tryCreateTestDatabase } from '../helpers/database.js';
+import { addMember, insertUserWithWorkspace, tryCreateTestDatabase } from '../helpers/database.js';
 
 /**
  * `ScriptProductionFlow` against the real schema, with fake ports.
@@ -84,17 +83,17 @@ function createFlow() {
   return { flow, extraction, sourceFiles, clock };
 }
 
-async function createActor(): Promise<Actor> {
-  const [row] = await db()
-    .insert(users)
-    .values({ email: `editor-${randomUUID()}@example.com`, passwordHash: 'not-used' })
-    .returning();
+/** An editor of their own personal workspace. */
+async function createActor(): Promise<Actor & { workspaceId: string }> {
+  const user = await insertUserWithWorkspace(db());
+  return { userId: user.id, workspaceId: user.workspaceId };
+}
 
-  if (row === undefined) {
-    throw new Error('inserting a test user returned no row');
-  }
-
-  return { userId: row.id };
+/** A plain member of `editor`'s workspace. */
+async function createMemberOf(editor: { workspaceId: string }): Promise<Actor> {
+  const user = await insertUserWithWorkspace(db());
+  await addMember(db(), editor.workspaceId, user.id);
+  return { userId: user.id };
 }
 
 function upload(storedPath = '/uploads/avarul.pdf') {
@@ -174,7 +173,7 @@ describe.skipIf(database === null)('ScriptProductionFlow', () => {
       const { flow, extraction, clock } = createFlow();
       const actor = await createActor();
 
-      const changed = await flow.startImport(actor, upload());
+      const changed = await flow.startImport(actor, actor.workspaceId, upload());
 
       expect(changed.script.stage).toBe('extracting');
       expect(changed.script.stageEnteredAt).toBe(clock.now().toISOString());
@@ -190,7 +189,7 @@ describe.skipIf(database === null)('ScriptProductionFlow', () => {
       const actor = await createActor();
       extraction.enqueue.mockRejectedValueOnce(new Error('Redis unreachable'));
 
-      const changed = await flow.startImport(actor, upload());
+      const changed = await flow.startImport(actor, actor.workspaceId, upload());
       expect(changed.script.stage).toBe('extracting');
       expect(extraction.jobs).toHaveLength(0);
 
@@ -206,7 +205,7 @@ describe.skipIf(database === null)('ScriptProductionFlow', () => {
     it('saves the lines and moves the script to review in one step', async () => {
       const { flow, extraction, clock } = createFlow();
       const actor = await createActor();
-      const { script } = await flow.startImport(actor, upload());
+      const { script } = await flow.startImport(actor, actor.workspaceId, upload());
 
       clock.advance(5_000);
       const outcome = await flow.onExtractionCompleted(lastRun(extraction), extractionOf(PLAY));
@@ -221,7 +220,7 @@ describe.skipIf(database === null)('ScriptProductionFlow', () => {
     it('ignores a duplicate completion of the same run', async () => {
       const { flow, extraction } = createFlow();
       const actor = await createActor();
-      await flow.startImport(actor, upload());
+      await flow.startImport(actor, actor.workspaceId, upload());
       const run = lastRun(extraction);
 
       await flow.onExtractionCompleted(run, extractionOf(PLAY));
@@ -233,7 +232,7 @@ describe.skipIf(database === null)('ScriptProductionFlow', () => {
     it('records the failure reason of the current run', async () => {
       const { flow, extraction } = createFlow();
       const actor = await createActor();
-      const { script } = await flow.startImport(actor, upload());
+      const { script } = await flow.startImport(actor, actor.workspaceId, upload());
 
       const outcome = await flow.onExtractionFailed(lastRun(extraction), {
         message: 'Every page failed to extract',
@@ -248,7 +247,7 @@ describe.skipIf(database === null)('ScriptProductionFlow', () => {
     it('ignores a reaction for a script that was deleted', async () => {
       const { flow, extraction } = createFlow();
       const actor = await createActor();
-      const { script } = await flow.startImport(actor, upload());
+      const { script } = await flow.startImport(actor, actor.workspaceId, upload());
       const run = lastRun(extraction);
 
       await flow.delete(actor, script.id);
@@ -265,7 +264,7 @@ describe.skipIf(database === null)('ScriptProductionFlow', () => {
     it('starts a new run and makes the old run stale', async () => {
       const { flow, extraction } = createFlow();
       const actor = await createActor();
-      const { script } = await flow.startImport(actor, upload());
+      const { script } = await flow.startImport(actor, actor.workspaceId, upload());
       const oldRun = lastRun(extraction);
 
       await flow.reparse(actor, script.id);
@@ -291,7 +290,7 @@ describe.skipIf(database === null)('ScriptProductionFlow', () => {
     it('runs from failed and clears the old failure reason', async () => {
       const { flow, extraction } = createFlow();
       const actor = await createActor();
-      const { script } = await flow.startImport(actor, upload());
+      const { script } = await flow.startImport(actor, actor.workspaceId, upload());
       await flow.onExtractionFailed(lastRun(extraction), { message: 'OCR down' });
 
       const changed = await flow.reparse(actor, script.id);
@@ -303,7 +302,7 @@ describe.skipIf(database === null)('ScriptProductionFlow', () => {
     it('lets only one of two simultaneous reparses through', async () => {
       const { flow, extraction } = createFlow();
       const actor = await createActor();
-      const { script } = await flow.startImport(actor, upload());
+      const { script } = await flow.startImport(actor, actor.workspaceId, upload());
       await flow.onExtractionCompleted(lastRun(extraction), extractionOf(PLAY));
       const jobsBefore = extraction.jobs.length;
 
@@ -327,7 +326,7 @@ describe.skipIf(database === null)('ScriptProductionFlow', () => {
     it('never lets a completion and a reparse of the same run both win', async () => {
       const { flow, extraction } = createFlow();
       const actor = await createActor();
-      const { script } = await flow.startImport(actor, upload());
+      const { script } = await flow.startImport(actor, actor.workspaceId, upload());
       const run = lastRun(extraction);
 
       const [completion, reparse] = await withRowLocked<unknown>(script.id, 2, () => [
@@ -358,10 +357,77 @@ describe.skipIf(database === null)('ScriptProductionFlow', () => {
       const { flow } = createFlow();
       const owner = await createActor();
       const stranger = await createActor();
-      const { script } = await flow.startImport(owner, upload());
+      const { script } = await flow.startImport(owner, owner.workspaceId, upload());
 
       await expect(flow.reparse(stranger, script.id)).rejects.toBeInstanceOf(NotFoundError);
       await expect(flow.previewReparse(stranger, script.id)).rejects.toBeInstanceOf(NotFoundError);
+    });
+  });
+
+  describe('permissions', () => {
+    it('lets only the editor import into a workspace', async () => {
+      const { flow, extraction } = createFlow();
+      const editor = await createActor();
+      const member = await createMemberOf(editor);
+      const stranger = await createActor();
+
+      await expect(flow.startImport(member, editor.workspaceId, upload())).rejects.toBeInstanceOf(
+        ForbiddenError,
+      );
+      await expect(flow.startImport(stranger, editor.workspaceId, upload())).rejects.toBeInstanceOf(
+        NotFoundError,
+      );
+      expect(extraction.jobs).toHaveLength(0);
+    });
+
+    it('refuses every editor command to a member, and leaves the script as it was', async () => {
+      const { flow, extraction, sourceFiles } = createFlow();
+      const editor = await createActor();
+      const member = await createMemberOf(editor);
+      const { script } = await flow.startImport(editor, editor.workspaceId, upload());
+      await flow.onExtractionCompleted(lastRun(extraction), extractionOf(PLAY));
+      const before = await scriptRow(script.id);
+      const [characterRow] = await db()
+        .select({ id: characters.id })
+        .from(characters)
+        .where(eq(characters.scriptId, script.id));
+
+      const commands = [
+        () => flow.reparse(member, script.id),
+        () => flow.previewReparse(member, script.id),
+        () => flow.delete(member, script.id),
+        () => flow.previewDelete(member, script.id),
+        () => flow.confirmGender(member, script.id, characterRow?.id ?? '', 'female'),
+      ];
+      for (const command of commands) {
+        await expect(command()).rejects.toBeInstanceOf(ForbiddenError);
+      }
+
+      expect(await scriptRow(script.id)).toEqual(before);
+      expect(sourceFiles.remove).not.toHaveBeenCalled();
+    });
+
+    it('follows the editor role when it is transferred', async () => {
+      const { flow } = createFlow();
+      const editor = await createActor();
+      const member = await createMemberOf(editor);
+      const { script } = await flow.startImport(editor, editor.workspaceId, upload());
+
+      await db().transaction(async (tx) => {
+        await tx
+          .update(workspaceMembers)
+          .set({ role: 'member' })
+          .where(eq(workspaceMembers.userId, editor.userId));
+        await tx
+          .update(workspaceMembers)
+          .set({ role: 'editor' })
+          .where(eq(workspaceMembers.userId, member.userId));
+      });
+
+      await expect(flow.reparse(editor, script.id)).rejects.toBeInstanceOf(ForbiddenError);
+      await expect(flow.reparse(member, script.id)).resolves.toMatchObject({
+        kind: 'stage_changed',
+      });
     });
   });
 
@@ -369,7 +435,11 @@ describe.skipIf(database === null)('ScriptProductionFlow', () => {
     it('removes the row and the stored PDF from any stage', async () => {
       const { flow, sourceFiles } = createFlow();
       const actor = await createActor();
-      const { script } = await flow.startImport(actor, upload('/uploads/to-delete.pdf'));
+      const { script } = await flow.startImport(
+        actor,
+        actor.workspaceId,
+        upload('/uploads/to-delete.pdf'),
+      );
 
       await flow.delete(actor, script.id);
 
@@ -380,7 +450,7 @@ describe.skipIf(database === null)('ScriptProductionFlow', () => {
     it('summarises what would be lost before the editor confirms', async () => {
       const { flow, extraction } = createFlow();
       const actor = await createActor();
-      const { script } = await flow.startImport(actor, upload());
+      const { script } = await flow.startImport(actor, actor.workspaceId, upload());
       await flow.onExtractionCompleted(lastRun(extraction), extractionOf(PLAY));
 
       await expect(flow.previewDelete(actor, script.id)).resolves.toEqual({
@@ -397,7 +467,7 @@ describe.skipIf(database === null)('ScriptProductionFlow', () => {
     it('re-queues a run whose job was lost, once', async () => {
       const { flow, extraction, clock } = createFlow();
       const actor = await createActor();
-      await flow.startImport(actor, upload());
+      await flow.startImport(actor, actor.workspaceId, upload());
       extraction.lose();
 
       clock.advance(GRACE_MS + 1);
@@ -418,7 +488,7 @@ describe.skipIf(database === null)('ScriptProductionFlow', () => {
     it('leaves runs younger than the grace period alone', async () => {
       const { flow, extraction, clock } = createFlow();
       const actor = await createActor();
-      await flow.startImport(actor, upload());
+      await flow.startImport(actor, actor.workspaceId, upload());
       extraction.lose();
 
       clock.advance(GRACE_MS - 1);
@@ -432,7 +502,7 @@ describe.skipIf(database === null)('ScriptProductionFlow', () => {
     it('fails a run whose job failed without telling the flow', async () => {
       const { flow, extraction, clock } = createFlow();
       const actor = await createActor();
-      const { script } = await flow.startImport(actor, upload());
+      const { script } = await flow.startImport(actor, actor.workspaceId, upload());
       extraction.failRun(lastRun(extraction), 'job stalled more than allowable limit');
 
       clock.advance(GRACE_MS + 1);
@@ -453,6 +523,7 @@ describe.skipIf(database === null)('ScriptProductionFlow', () => {
       const [row] = await db()
         .insert(scripts)
         .values({
+          workspaceId: actor.workspaceId,
           userId: actor.userId,
           title: 'Migrated',
           stage: 'extracting',
@@ -470,7 +541,7 @@ describe.skipIf(database === null)('ScriptProductionFlow', () => {
     it('ignores scripts that are not extracting', async () => {
       const { flow, extraction, clock } = createFlow();
       const actor = await createActor();
-      await flow.startImport(actor, upload());
+      await flow.startImport(actor, actor.workspaceId, upload());
       await flow.onExtractionCompleted(lastRun(extraction), extractionOf(PLAY));
       extraction.lose();
 

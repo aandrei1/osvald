@@ -4,6 +4,7 @@
  */
 
 export * from './users.js';
+export * from './workspaces.js';
 export * from './scripts.js';
 export * from './scenes.js';
 export * from './characters.js';

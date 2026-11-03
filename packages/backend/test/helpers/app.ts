@@ -10,12 +10,15 @@ import { characters } from '../../src/db/schema/characters.js';
 import { lines } from '../../src/db/schema/lines.js';
 import { scenes } from '../../src/db/schema/scenes.js';
 import { scripts } from '../../src/db/schema/scripts.js';
-import { users } from '../../src/db/schema/users.js';
+import type { Clock } from '../../src/ports/clock.js';
 import type { QueueRegistry } from '../../src/queue/queues.js';
+import { insertUserWithWorkspace } from './database.js';
 import {
+  createFakeEmailSender,
   createFakeExtractionQueue,
   createFakeQueues,
   createFakeRedis,
+  type FakeEmailSender,
   type FakeExtractionQueue,
   type FakeQueues,
 } from './fakes.js';
@@ -31,21 +34,26 @@ export interface TestApp {
   queues: FakeQueues;
   /** What `ScriptProductionFlow` handed to the worker. */
   extraction: FakeExtractionQueue;
+  /** Invitation e-mails `WorkspaceMembership` sent. */
+  emails: FakeEmailSender;
   close(): Promise<void>;
 }
 
 export async function createTestApp(
   db: Database,
-  options: { redis?: Redis; queues?: QueueRegistry } = {},
+  options: { redis?: Redis; queues?: QueueRegistry; clock?: Clock } = {},
 ): Promise<TestApp> {
   const queues = createFakeQueues();
   const extraction = createFakeExtractionQueue();
+  const emails = createFakeEmailSender();
 
   const app = await buildApp({
     db,
     redis: options.redis ?? createFakeRedis(),
     queues: options.queues ?? queues.registry,
     extractionQueue: extraction,
+    emailSender: emails,
+    clock: options.clock,
   });
 
   await app.ready();
@@ -54,6 +62,7 @@ export async function createTestApp(
     app,
     queues,
     extraction,
+    emails,
     async close(): Promise<void> {
       await app.close();
     },
@@ -65,9 +74,14 @@ export interface TestUser {
   email: string;
   password: string;
   token: string;
+  /** The personal workspace, in which the user is the editor. */
+  workspaceId: string;
 }
 
-/** Inserts an account directly and signs the token the route guard expects. */
+/**
+ * Inserts an account with its personal workspace, as registration does, and
+ * signs the token the route guard expects.
+ */
 export async function createTestUser(
   app: FastifyInstance,
   db: Database,
@@ -76,16 +90,15 @@ export async function createTestUser(
   const email = (options.email ?? `actor-${randomUUID()}@example.com`).toLowerCase();
   const password = options.password ?? 'correct horse battery staple';
 
-  const [row] = await db
-    .insert(users)
-    .values({ email, passwordHash: await hash(password), displayName: 'Test Actor' })
-    .returning();
+  const user = await insertUserWithWorkspace(db, { email, passwordHash: await hash(password) });
 
-  if (row === undefined) {
-    throw new Error('inserting a test user returned no row');
-  }
-
-  return { id: row.id, email, password, token: app.jwt.sign({ sub: row.id, email }) };
+  return {
+    id: user.id,
+    email,
+    password,
+    token: app.jwt.sign({ sub: user.id, email }),
+    workspaceId: user.workspaceId,
+  };
 }
 
 export interface SeededScript {
@@ -97,12 +110,18 @@ export interface SeededScript {
 /** One script in review with a scene, a character and a dialogue + direction line. */
 export async function seedParsedScript(
   db: Database,
-  options: { userId: string | null; title?: string; sourceFilePath?: string | null },
+  options: {
+    workspaceId: string;
+    userId?: string | null;
+    title?: string;
+    sourceFilePath?: string | null;
+  },
 ): Promise<SeededScript> {
   const [script] = await db
     .insert(scripts)
     .values({
-      userId: options.userId,
+      workspaceId: options.workspaceId,
+      userId: options.userId ?? null,
       title: options.title ?? 'Avarul',
       author: 'Molière',
       stage: 'in_review',

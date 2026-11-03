@@ -13,27 +13,25 @@ import {
   idParamsSchema,
   lossSummarySchema,
   noContentSchema,
-  paginationQuerySchema,
   scriptDetailSchema,
+  scriptListQuerySchema,
   scriptListResponseSchema,
   stageChangedResponseSchema,
   updateCharacterBodySchema,
+  workspaceIdQuerySchema,
 } from '@osvald/shared';
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 
 import { env } from '../../config/env.js';
 import { BadRequestError } from '../../lib/errors.js';
-import {
-  getScriptDetail,
-  getScriptRow,
-  listScripts,
-  setCharacterGender,
-} from '../../services/script.service.js';
+import { getScriptDetail, listScripts } from '../../services/script.service.js';
 
 /**
  * `/scripts` routes.
  *
- * Every route requires a bearer token: a script is personal rehearsal material.
+ * Every route requires a bearer token. A script belongs to a workspace: its
+ * members read it, its editor prepares it, and the role is checked on the
+ * server by every command (403 for a member, 404 outside the workspace).
  * The routes are thin: they validate the request and call one command of
  * `ScriptProductionFlow` (`app.scriptFlow`), which answers with the new stage.
  * Uploading streams the PDF to disk first; extraction happens on the worker,
@@ -95,18 +93,19 @@ export const scriptRoutes: FastifyPluginAsyncZod = async (app, _opts) => {
       schema: {
         tags: ['scripts'],
         summary: 'List scripts',
-        description: "The caller's library, newest first.",
+        description: "One workspace's library, newest first. Any member may read it.",
         security: [{ bearerAuth: [] }],
-        querystring: paginationQuerySchema,
+        querystring: scriptListQuerySchema,
         response: {
           200: scriptListResponseSchema,
           401: apiErrorSchema,
+          404: apiErrorSchema,
         },
       },
     },
     async (request) => {
-      const { limit, offset } = request.query;
-      return listScripts(app.db, { limit, offset, userId: request.user.sub });
+      const { limit, offset, workspaceId } = request.query;
+      return listScripts(app.db, { limit, offset, workspaceId, userId: request.user.sub });
     },
   );
 
@@ -156,7 +155,7 @@ export const scriptRoutes: FastifyPluginAsyncZod = async (app, _opts) => {
         tags: ['scripts'],
         summary: "Correct a character's gender",
         description:
-          'Overrides the detected gender. The value is kept when the script is parsed again.',
+          'Editor only. Overrides the detected gender. The value is kept when the script is parsed again.',
         security: [{ bearerAuth: [] }],
         params: characterParamsSchema,
         body: updateCharacterBodySchema,
@@ -164,14 +163,19 @@ export const scriptRoutes: FastifyPluginAsyncZod = async (app, _opts) => {
           200: characterSchema,
           400: apiErrorSchema,
           401: apiErrorSchema,
+          403: apiErrorSchema,
           404: apiErrorSchema,
         },
       },
     },
     async (request) => {
-      // Ownership check first: a character id alone must not reach another user's script.
-      const script = await getScriptRow(app.db, request.params.id, request.user.sub);
-      return setCharacterGender(app.db, script.id, request.params.characterId, request.body.gender);
+      const { character } = await app.scriptFlow.confirmGender(
+        { userId: request.user.sub },
+        request.params.id,
+        request.params.characterId,
+        request.body.gender,
+      );
+      return character;
     },
   );
 
@@ -182,13 +186,16 @@ export const scriptRoutes: FastifyPluginAsyncZod = async (app, _opts) => {
         tags: ['scripts'],
         summary: 'Upload a script PDF',
         description:
-          'Accepts a single multipart/form-data PDF plus optional `title`, `author` and `description` fields. Stores the file and starts the import: the script answers in `extracting` while the worker reads it.',
+          'Editor only. Accepts a single multipart/form-data PDF plus optional `title`, `author` and `description` fields, into the workspace named by `workspaceId`. Stores the file and starts the import: the script answers in `extracting` while the worker reads it.',
         consumes: ['multipart/form-data'],
         security: [{ bearerAuth: [] }],
+        querystring: workspaceIdQuerySchema,
         response: {
           201: stageChangedResponseSchema,
           400: apiErrorSchema,
           401: apiErrorSchema,
+          403: apiErrorSchema,
+          404: apiErrorSchema,
           413: apiErrorSchema,
         },
       },
@@ -225,21 +232,28 @@ export const scriptRoutes: FastifyPluginAsyncZod = async (app, _opts) => {
 
       const requestedTitle = fields.get('title')?.trim();
 
-      const { script } = await app.scriptFlow.startImport(
-        { userId: request.user.sub },
-        {
-          fileName: upload.fileName,
-          storedPath: upload.storedPath,
-          title:
-            requestedTitle !== undefined && requestedTitle.length > 0
-              ? requestedTitle
-              : titleFromFileName(upload.fileName),
-          author: fields.get('author') ?? null,
-          description: fields.get('description') ?? null,
-        },
-      );
+      try {
+        const { script } = await app.scriptFlow.startImport(
+          { userId: request.user.sub },
+          request.query.workspaceId,
+          {
+            fileName: upload.fileName,
+            storedPath: upload.storedPath,
+            title:
+              requestedTitle !== undefined && requestedTitle.length > 0
+                ? requestedTitle
+                : titleFromFileName(upload.fileName),
+            author: fields.get('author') ?? null,
+            description: fields.get('description') ?? null,
+          },
+        );
 
-      return reply.status(201).send({ script });
+        return await reply.status(201).send({ script });
+      } catch (error) {
+        // A refused import (a member, a foreign workspace) leaves no file behind.
+        await rm(upload.storedPath, { force: true });
+        throw error;
+      }
     },
   );
 
@@ -255,6 +269,7 @@ export const scriptRoutes: FastifyPluginAsyncZod = async (app, _opts) => {
         response: {
           200: lossSummarySchema,
           401: apiErrorSchema,
+          403: apiErrorSchema,
           404: apiErrorSchema,
         },
       },
@@ -270,13 +285,14 @@ export const scriptRoutes: FastifyPluginAsyncZod = async (app, _opts) => {
         tags: ['scripts'],
         summary: 'Extract the stored PDF again',
         description:
-          'Allowed in every stage, under a new run. The current scenes, characters and lines are replaced once the new extraction completes; text corrected by hand is lost, manual genders are kept.',
+          'Editor only. Allowed in every stage, under a new run. The current scenes, characters and lines are replaced once the new extraction completes; text corrected by hand is lost, manual genders are kept.',
         security: [{ bearerAuth: [] }],
         params: idParamsSchema,
         response: {
           202: stageChangedResponseSchema,
           400: apiErrorSchema,
           401: apiErrorSchema,
+          403: apiErrorSchema,
           404: apiErrorSchema,
           409: apiErrorSchema,
         },
@@ -303,6 +319,7 @@ export const scriptRoutes: FastifyPluginAsyncZod = async (app, _opts) => {
         response: {
           200: lossSummarySchema,
           401: apiErrorSchema,
+          403: apiErrorSchema,
           404: apiErrorSchema,
         },
       },
@@ -317,11 +334,13 @@ export const scriptRoutes: FastifyPluginAsyncZod = async (app, _opts) => {
       schema: {
         tags: ['scripts'],
         summary: 'Delete a script and everything parsed from it',
+        description: 'Editor only.',
         security: [{ bearerAuth: [] }],
         params: idParamsSchema,
         response: {
           204: noContentSchema,
           401: apiErrorSchema,
+          403: apiErrorSchema,
           404: apiErrorSchema,
         },
       },

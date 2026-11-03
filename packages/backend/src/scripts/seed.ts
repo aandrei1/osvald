@@ -2,11 +2,12 @@ import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 
-import { eq } from 'drizzle-orm';
+import { and, asc, eq } from 'drizzle-orm';
 
 import { env } from '../config/env.js';
 import { createDatabase, type Database } from '../db/client.js';
 import { scripts } from '../db/schema/scripts.js';
+import { workspaceMembers } from '../db/schema/workspaces.js';
 import { createConsoleLogger } from '../lib/logger.js';
 import { parseScriptText, splitIntoWorks } from '../parsing/script-parser.js';
 import { insertScript, saveParseResult } from '../services/script.service.js';
@@ -78,7 +79,28 @@ function titleFor(segment: { title: string | null }, index: number): string {
   return segment.title ?? `Untitled work ${index + 1}`;
 }
 
-async function importWorks(db: Database, options: SeedOptions, userId: string): Promise<number> {
+/** The oldest workspace the user edits: the personal one made at registration. */
+async function personalWorkspaceId(db: Database, userId: string): Promise<string> {
+  const [row] = await db
+    .select({ workspaceId: workspaceMembers.workspaceId })
+    .from(workspaceMembers)
+    .where(and(eq(workspaceMembers.userId, userId), eq(workspaceMembers.role, 'editor')))
+    .orderBy(asc(workspaceMembers.joinedAt))
+    .limit(1);
+
+  if (row === undefined) {
+    throw new Error(`user ${userId} edits no workspace to seed into`);
+  }
+
+  return row.workspaceId;
+}
+
+async function importWorks(
+  db: Database,
+  options: SeedOptions,
+  userId: string,
+  workspaceId: string,
+): Promise<number> {
   const raw = await readFile(options.file, 'utf8');
 
   const segments = splitIntoWorks(raw);
@@ -105,6 +127,7 @@ async function importWorks(db: Database, options: SeedOptions, userId: string): 
     // Extraction is what the seed skips, so the script lands straight in review.
     const summary = await db.transaction(async (tx) => {
       const script = await insertScript(tx, {
+        workspaceId,
         userId,
         title,
         author: options.author,
@@ -142,18 +165,20 @@ async function main(): Promise<void> {
       displayName: 'Demo actor',
     });
 
-    logger.info(`seeding into account ${user.email} (${user.id})`);
+    const workspaceId = await personalWorkspaceId(database.db, user.id);
+
+    logger.info(`seeding into account ${user.email} (${user.id}), workspace ${workspaceId}`);
 
     if (options.reset) {
       const removed = await database.db
         .delete(scripts)
-        .where(eq(scripts.userId, user.id))
+        .where(eq(scripts.workspaceId, workspaceId))
         .returning({ id: scripts.id });
 
       logger.info(`removed ${removed.length} existing script(s)`);
     }
 
-    const imported = await importWorks(database.db, options, user.id);
+    const imported = await importWorks(database.db, options, user.id, workspaceId);
 
     logger.info(`done — ${imported} script(s) ready to rehearse`);
     logger.info(`sign in with ${options.email} / ${options.password}`);

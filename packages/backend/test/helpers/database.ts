@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -7,6 +8,9 @@ import postgres from 'postgres';
 
 import type { Database } from '../../src/db/client.js';
 import * as schema from '../../src/db/schema/index.js';
+import { users } from '../../src/db/schema/users.js';
+import { workspaceMembers } from '../../src/db/schema/workspaces.js';
+import { createWorkspace } from '../../src/services/workspace.service.js';
 
 /**
  * Disposable Postgres database for integration tests.
@@ -94,11 +98,57 @@ export async function tryCreateTestDatabase(url = testDatabaseUrl()): Promise<Te
     db,
     async truncate(): Promise<void> {
       await client.unsafe(
-        'truncate table lines, scenes, characters, scripts, users restart identity cascade',
+        'truncate table lines, scenes, characters, scripts, invitations, workspace_members, workspaces, users restart identity cascade',
       );
     },
     async close(): Promise<void> {
       await client.end({ timeout: 5 });
     },
   };
+}
+
+export interface SeededUser {
+  id: string;
+  email: string;
+  /** The personal workspace, in which the user is the editor. */
+  workspaceId: string;
+}
+
+/**
+ * Inserts an account with its personal workspace, as registration does, but
+ * without hashing a password the test will not use.
+ */
+export async function insertUserWithWorkspace(
+  db: Database,
+  options: { email?: string; passwordHash?: string; displayName?: string | null } = {},
+): Promise<SeededUser> {
+  const email = (options.email ?? `actor-${randomUUID()}@example.com`).toLowerCase();
+
+  return db.transaction(async (tx) => {
+    const [row] = await tx
+      .insert(users)
+      .values({
+        email,
+        passwordHash: options.passwordHash ?? 'not-used',
+        displayName: options.displayName ?? 'Test Actor',
+      })
+      .returning();
+
+    if (row === undefined) {
+      throw new Error('inserting a test user returned no row');
+    }
+
+    const workspace = await createWorkspace(tx, {
+      name: `${email} workspace`,
+      editorId: row.id,
+      now: new Date(),
+    });
+
+    return { id: row.id, email, workspaceId: workspace.id };
+  });
+}
+
+/** Adds `userId` to the workspace as a plain member, as an accepted invitation would. */
+export async function addMember(db: Database, workspaceId: string, userId: string): Promise<void> {
+  await db.insert(workspaceMembers).values({ workspaceId, userId, role: 'member' });
 }

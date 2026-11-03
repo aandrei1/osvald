@@ -32,6 +32,17 @@ export class ConflictError extends Error {
   }
 }
 
+/**
+ * The caller is a member but their role does not allow the action. A caller
+ * who is not a member gets a `NotFoundError` instead, so ids cannot be probed.
+ */
+export class ForbiddenError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ForbiddenError';
+  }
+}
+
 export class UnauthorizedError extends Error {
   constructor(message = 'Authentication required') {
     super(message);

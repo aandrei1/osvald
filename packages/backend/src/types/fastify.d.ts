@@ -3,6 +3,7 @@ import type { Redis } from 'ioredis';
 
 import type { Database } from '../db/client.js';
 import type { ScriptProductionFlow } from '../flows/script-production-flow.js';
+import type { WorkspaceMembership } from '../flows/workspace-membership.js';
 import type { AccessTokenPayload } from '../lib/auth.js';
 import type { QueueRegistry } from '../queue/queues.js';
 
@@ -17,6 +18,8 @@ declare module 'fastify' {
     db: Database;
     /** Every step of a script's production (see `src/flows/script-production-flow.ts`). */
     scriptFlow: ScriptProductionFlow;
+    /** Workspaces, members and invitations (see `src/flows/workspace-membership.ts`). */
+    workspaces: WorkspaceMembership;
     /** BullMQ queues (see `src/queue/queues.ts`). */
     queues: QueueRegistry;
     /** Redis client used for probes and future caching/pub-sub work. */

@@ -14,12 +14,15 @@ import type { Redis } from 'ioredis';
 
 import { createBullmqExtractionQueue } from './adapters/bullmq-extraction-queue.js';
 import { createLocalSourceFileStore } from './adapters/local-source-file-store.js';
+import { createSmtpEmailSender } from './adapters/smtp-email-sender.js';
 import { corsOrigins, env } from './config/env.js';
 import { createDatabase, type Database } from './db/client.js';
 import { ScriptProductionFlow } from './flows/script-production-flow.js';
+import { WorkspaceMembership } from './flows/workspace-membership.js';
 import { registerAuth } from './plugins/auth.js';
 import { registerErrorHandler } from './plugins/error-handler.js';
 import { systemClock, type Clock } from './ports/clock.js';
+import type { EmailSender } from './ports/email-sender.js';
 import type { ExtractionQueue } from './ports/extraction-queue.js';
 import type { SourceFileStore } from './ports/source-file-store.js';
 import { createRedisClient } from './queue/connection.js';
@@ -42,6 +45,8 @@ export interface BuildAppOptions {
   extractionQueue?: ExtractionQueue;
   sourceFiles?: SourceFileStore;
   clock?: Clock;
+  /** Invitation e-mail; defaults to SMTP at `SMTP_URL`. */
+  emailSender?: EmailSender;
 }
 
 interface ResolvedDatabase {
@@ -130,6 +135,27 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     }),
   );
 
+  let emailSender = options.emailSender;
+  if (emailSender === undefined) {
+    const smtp = createSmtpEmailSender({ url: env.SMTP_URL, from: env.MAIL_FROM });
+    app.addHook('onClose', async () => {
+      smtp.close();
+    });
+    emailSender = smtp;
+  }
+
+  app.decorate(
+    'workspaces',
+    new WorkspaceMembership({
+      db: database.db,
+      emailSender,
+      clock: options.clock ?? systemClock,
+      logger: app.log,
+      appBaseUrl: env.APP_BASE_URL,
+      invitationTtlMs: env.INVITATION_TTL_HOURS * 60 * 60 * 1000,
+    }),
+  );
+
   await app.register(fastifyCors, {
     origin: corsOrigins,
     credentials: true,
@@ -156,6 +182,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
         { name: 'ops', description: 'Health and operational endpoints' },
         { name: 'scripts', description: 'Script upload and retrieval' },
         { name: 'auth', description: 'Accounts and tokens' },
+        { name: 'workspaces', description: 'Workspaces, members and invitations' },
       ],
       components: {
         securitySchemes: {

@@ -1,4 +1,4 @@
-import { and, desc, eq, isNull, or, type SQL } from 'drizzle-orm';
+import { and, desc, eq, inArray, type SQL } from 'drizzle-orm';
 import type {
   Character,
   Gender,
@@ -16,6 +16,8 @@ import { characters, type CharacterRow, type NewCharacterRow } from '../db/schem
 import { lines, type LineRow, type NewLineRow } from '../db/schema/lines.js';
 import { scenes, type NewSceneRow, type SceneRow } from '../db/schema/scenes.js';
 import { scripts, type NewScriptRow, type ScriptRow } from '../db/schema/scripts.js';
+import { workspaceMembers } from '../db/schema/workspaces.js';
+import { authorizeWorkspace } from '../flows/authorization.js';
 import { NotFoundError } from '../lib/errors.js';
 
 /* -------------------------------------------------------------------------- */
@@ -26,6 +28,7 @@ import { NotFoundError } from '../lib/errors.js';
 export function mapScriptRow(row: ScriptRow): Script {
   return {
     id: row.id,
+    workspaceId: row.workspaceId,
     userId: row.userId,
     title: row.title,
     author: row.author,
@@ -91,25 +94,29 @@ export function mapCharacterRow(row: CharacterRow): Character {
 export interface ListScriptsOptions {
   limit: number;
   offset: number;
-  /** Owner whose library is being read. */
+  workspaceId: string;
+  /** Reader; must be a member of the workspace. */
   userId: string;
 }
 
-/**
- * Scripts visible to one user, newest first.
- *
- * Anonymous scripts (`user_id IS NULL`) stay visible to everyone: uploads made
- * before the uploader signed in would otherwise disappear from their library.
- */
-function visibleTo(userId: string): SQL | undefined {
-  return or(eq(scripts.userId, userId), isNull(scripts.userId));
+/** Scripts in any workspace the user belongs to. */
+function visibleTo(db: Database, userId: string): SQL {
+  return inArray(
+    scripts.workspaceId,
+    db
+      .select({ workspaceId: workspaceMembers.workspaceId })
+      .from(workspaceMembers)
+      .where(eq(workspaceMembers.userId, userId)),
+  );
 }
 
+/** One workspace's library, newest first. A non-member gets a 404. */
 export async function listScripts(
   db: Database,
   options: ListScriptsOptions,
 ): Promise<ScriptListResponse> {
-  const where = visibleTo(options.userId);
+  await authorizeWorkspace(db, { userId: options.userId }, options.workspaceId, 'script:read');
+  const where = eq(scripts.workspaceId, options.workspaceId);
 
   const [rows, total] = await Promise.all([
     db
@@ -132,7 +139,7 @@ export async function getScriptDetail(
   userId: string,
 ): Promise<ScriptDetail> {
   const row = await db.query.scripts.findFirst({
-    where: and(eq(scripts.id, scriptId), visibleTo(userId)),
+    where: and(eq(scripts.id, scriptId), visibleTo(db, userId)),
     with: {
       scenes: {
         orderBy: (scene, { asc }) => [asc(scene.orderIndex)],
@@ -150,7 +157,7 @@ export async function getScriptDetail(
 
   if (row === undefined) {
     // Deliberately the same answer as "does not exist": a 403 would confirm
-    // that someone else's script id is real.
+    // that a script id outside the caller's workspaces is real.
     throw new NotFoundError('Script', scriptId);
   }
 
@@ -161,26 +168,10 @@ export async function getScriptDetail(
   };
 }
 
-/** Loads a script row for ownership checks, without its scenes. */
-export async function getScriptRow(
-  db: Database,
-  scriptId: string,
-  userId: string,
-): Promise<ScriptRow> {
-  const row = await db.query.scripts.findFirst({
-    where: and(eq(scripts.id, scriptId), visibleTo(userId)),
-  });
-
-  if (row === undefined) {
-    throw new NotFoundError('Script', scriptId);
-  }
-
-  return row;
-}
-
 /** A new script row. Its stage and run come from `ScriptProductionFlow` (or the seed). */
 export type InsertScriptInput = Pick<
   NewScriptRow,
+  | 'workspaceId'
   | 'userId'
   | 'title'
   | 'author'

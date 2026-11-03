@@ -25,8 +25,11 @@ const sceneId = '7f5d0f8e-6e1a-4f1e-9b2a-1c2d3e4f5a6c';
 const characterId = '7f5d0f8e-6e1a-4f1e-9b2a-1c2d3e4f5a6d';
 const userId = '7f5d0f8e-6e1a-4f1e-9b2a-1c2d3e4f5a6e';
 
+const workspaceId = '7f5d0f8e-6e1a-4f1e-9b2a-1c2d3e4f5a6f';
+
 const scriptRow: ScriptRow = {
   id: scriptId,
+  workspaceId,
   userId,
   title: 'Avarul',
   author: 'Molière',
@@ -85,6 +88,7 @@ describe('mapScriptRow', () => {
 
     expect(mapped).toEqual({
       id: scriptId,
+      workspaceId,
       userId,
       title: 'Avarul',
       author: 'Molière',

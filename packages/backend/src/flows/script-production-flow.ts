@@ -2,11 +2,13 @@ import { randomUUID } from 'node:crypto';
 
 import {
   canRunStep,
+  type Character,
   type Gender,
   type LossSummary,
   type Script,
   type ScriptFlowStep,
   type ScriptStage,
+  type WorkspacePermission,
 } from '@osvald/shared';
 import { and, count, eq, lt } from 'drizzle-orm';
 
@@ -22,18 +24,15 @@ import type { Clock } from '../ports/clock.js';
 import type { ExtractionQueue, RunRef } from '../ports/extraction-queue.js';
 import type { SourceFileStore } from '../ports/source-file-store.js';
 import {
-  getScriptRow,
   insertScript,
   mapScriptRow,
   saveParseResult,
+  setCharacterGender,
 } from '../services/script.service.js';
+import { authorizeScript, authorizeWorkspace, type Actor } from './authorization.js';
 
+export type { Actor } from './authorization.js';
 export type { RunRef } from '../ports/extraction-queue.js';
-
-/** Who issues a command. */
-export interface Actor {
-  userId: string;
-}
 
 /** A PDF the upload route has already streamed to disk. */
 export interface UploadedPdf {
@@ -59,6 +58,11 @@ export interface StageChanged<S extends ScriptStage> {
   script: Script & { stage: S };
 }
 
+export interface CharacterUpdated {
+  kind: 'character_updated';
+  character: Character;
+}
+
 /** A reaction for a run that is no longer current (reparsed, deleted, already handled). */
 export interface StaleReaction {
   kind: 'stale';
@@ -73,13 +77,6 @@ export interface RecoveryReport {
   /** Runs whose job had failed for good without telling the flow. */
   failed: number;
 }
-
-/**
- * The flow's own permissions. Etapa 1 only knows the owner, who may do all of them.
- *
- * TODO: [Etapa 2] Map these onto the workspace role matrix from `@osvald/shared`.
- */
-type Permission = 'script:import' | 'script:reparse' | 'script:delete' | 'script:read';
 
 /** The script changed between reading it and writing it. */
 export class StageConflictError extends ConflictError {
@@ -130,7 +127,7 @@ function stale(run: RunRef): StaleReaction {
  * is no longer the script's is ignored, so an old job cannot overwrite a newer
  * reparse.
  *
- * TODO: [Etapa 3] reviseLine, confirmGender, castVoice.
+ * TODO: [Etapa 3] reviseLine and castVoice; limit confirmGender to `in_review` and `ready`.
  * TODO: [Etapa 4] previewVoice, estimateSynthesis, submitForSynthesis, stopSynthesis, resumeSynthesis
  * and the synthesis reactions.
  */
@@ -155,11 +152,16 @@ export class ScriptProductionFlow {
   /* Commands                                                                 */
   /* ------------------------------------------------------------------------ */
 
-  async startImport(actor: Actor, file: UploadedPdf): Promise<StageChanged<'extracting'>> {
-    this.authorizeImport(actor);
+  async startImport(
+    actor: Actor,
+    workspaceId: string,
+    file: UploadedPdf,
+  ): Promise<StageChanged<'extracting'>> {
+    await authorizeWorkspace(this.db, actor, workspaceId, 'script:import');
 
     const now = this.clock.now();
     const row = await insertScript(this.db, {
+      workspaceId,
       userId: actor.userId,
       title: file.title,
       author: file.author,
@@ -219,6 +221,18 @@ export class ScriptProductionFlow {
     if (row.sourceFilePath !== null) {
       await this.sourceFiles.remove(row.sourceFilePath);
     }
+  }
+
+  /** Corrects a role's gender; `manual` keeps it through every reparse. */
+  async confirmGender(
+    actor: Actor,
+    scriptId: string,
+    characterId: string,
+    gender: Gender,
+  ): Promise<CharacterUpdated> {
+    const row = await this.authorize(actor, scriptId, 'script:edit');
+    const character = await setCharacterGender(this.db, row.id, characterId, gender);
+    return { kind: 'character_updated', character };
   }
 
   /* ------------------------------------------------------------------------ */
@@ -330,21 +344,16 @@ export class ScriptProductionFlow {
   /* ------------------------------------------------------------------------ */
 
   /**
-   * Loads the script the actor may act on. Someone else's script answers 404,
-   * exactly like a missing one, so ids cannot be probed.
-   *
-   * TODO: [Etapa 2] Check `permission` against the actor's workspace role.
+   * Loads the script if the actor's workspace role allows `permission`. A
+   * script outside the actor's workspaces answers 404, like a missing one.
    */
   private async authorize(
     actor: Actor,
     scriptId: string,
-    _permission: Permission,
+    permission: WorkspacePermission,
   ): Promise<ScriptRow> {
-    return getScriptRow(this.db, scriptId, actor.userId);
+    return authorizeScript(this.db, actor, scriptId, permission);
   }
-
-  /** TODO: [Etapa 2] Only a workspace editor may import. */
-  private authorizeImport(_actor: Actor): void {}
 
   private assertCanRun(step: ScriptFlowStep, row: ScriptRow): void {
     if (!canRunStep(step, row.stage)) {

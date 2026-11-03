@@ -2,6 +2,7 @@ import { SCRIPT_STAGES } from '@osvald/shared';
 import { index, integer, pgEnum, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 
 import { users } from './users.js';
+import { workspaces } from './workspaces.js';
 
 /** Values come from `SCRIPT_STAGES` in `@osvald/shared`. */
 export const scriptStageEnum = pgEnum('script_stage', SCRIPT_STAGES);
@@ -10,7 +11,11 @@ export const scripts = pgTable(
   'scripts',
   {
     id: uuid('id').primaryKey().defaultRandom(),
-    /** Owner. Nullable so anonymous/sandbox scripts are possible. */
+    /** Its members read and rehearse it; its editor prepares it. */
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'restrict' }),
+    /** Who uploaded it. `null` once that account is gone. */
     userId: uuid('user_id').references(() => users.id, { onDelete: 'set null' }),
     title: text('title').notNull(),
     author: text('author'),
@@ -35,7 +40,8 @@ export const scripts = pgTable(
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
-    index('scripts_user_id_idx').on(table.userId),
+    // A workspace's library, newest first.
+    index('scripts_workspace_id_created_at_idx').on(table.workspaceId, table.createdAt),
     // The recovery job looks for scripts that sat in a work stage for too long.
     index('scripts_stage_stage_entered_at_idx').on(table.stage, table.stageEnteredAt),
   ],

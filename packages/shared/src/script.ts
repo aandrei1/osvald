@@ -1,13 +1,15 @@
 import { z } from 'zod';
 
 import { characterSchema } from './character.js';
-import { idSchema, isoDateTimeSchema } from './common.js';
+import { idSchema, isoDateTimeSchema, paginationQuerySchema } from './common.js';
 import { sceneWithLinesSchema } from './scene.js';
 import { scriptStageSchema } from './script-stage.js';
 
 export const scriptSchema = z.object({
   id: idSchema,
-  /** Owner. `null` while anonymous sandbox scripts are allowed. */
+  /** The workspace whose members can read and rehearse it. */
+  workspaceId: idSchema,
+  /** Who uploaded it. `null` once that account is gone. */
   userId: idSchema.nullable(),
   title: z.string().min(1).max(300),
   author: z.string().max(300).nullable(),
@@ -37,6 +39,12 @@ export type ScriptDetail = z.infer<typeof scriptDetailSchema>;
 /* -------------------------------------------------------------------------- */
 /* Route payloads                                                             */
 /* -------------------------------------------------------------------------- */
+
+/** Query of `GET /scripts`: one workspace's library, a page at a time. */
+export const scriptListQuerySchema = paginationQuerySchema.extend({
+  workspaceId: idSchema,
+});
+export type ScriptListQuery = z.infer<typeof scriptListQuerySchema>;
 
 export const scriptListResponseSchema = z.object({
   items: z.array(scriptSchema),

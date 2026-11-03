@@ -1,4 +1,4 @@
-import { readFile, stat } from 'node:fs/promises';
+import { readdir, readFile, stat } from 'node:fs/promises';
 
 import {
   apiErrorSchema,
@@ -11,6 +11,7 @@ import {
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 
+import { env } from '../../src/config/env.js';
 import type { Database } from '../../src/db/client.js';
 import { scripts } from '../../src/db/schema/scripts.js';
 import {
@@ -20,7 +21,7 @@ import {
   multipartFile,
   seedParsedScript,
 } from '../helpers/app.js';
-import { tryCreateTestDatabase } from '../helpers/database.js';
+import { addMember, tryCreateTestDatabase } from '../helpers/database.js';
 
 /**
  * Script routes are the upload → extract → review entry point. Uploads stream a
@@ -54,7 +55,10 @@ describe.skipIf(database === null)('scripts routes', () => {
     const test = await createTestApp(db());
 
     try {
-      const response = await test.app.inject({ method: 'GET', url: '/scripts' });
+      const response = await test.app.inject({
+        method: 'GET',
+        url: '/scripts?workspaceId=00000000-0000-4000-8000-000000000000',
+      });
 
       expect(response.statusCode).toBe(401);
       expect(apiErrorSchema.parse(response.json()).message).toBe('Missing or invalid bearer token');
@@ -63,26 +67,121 @@ describe.skipIf(database === null)('scripts routes', () => {
     }
   });
 
-  it('lists the caller library plus anonymous scripts', async () => {
+  it("lists one workspace's library", async () => {
     const test = await createTestApp(db());
 
     try {
       const mine = await createTestUser(test.app, db(), { email: 'mine@example.com' });
       const other = await createTestUser(test.app, db(), { email: 'other@example.com' });
-      await seedParsedScript(db(), { userId: mine.id, title: 'Mine' });
-      await seedParsedScript(db(), { userId: other.id, title: 'Theirs' });
-      await seedParsedScript(db(), { userId: null, title: 'Anonymous' });
+      await seedParsedScript(db(), { workspaceId: mine.workspaceId, title: 'Mine' });
+      await seedParsedScript(db(), { workspaceId: other.workspaceId, title: 'Theirs' });
 
       const response = await test.app.inject({
         method: 'GET',
-        url: '/scripts',
+        url: `/scripts?workspaceId=${mine.workspaceId}`,
         headers: bearer(mine.token),
       });
       expect(response.statusCode).toBe(200);
 
       const body = scriptListResponseSchema.parse(response.json());
-      expect(body.items.map((script) => script.title).sort()).toEqual(['Anonymous', 'Mine']);
-      expect(body.total).toBe(2);
+      expect(body.items.map((script) => script.title)).toEqual(['Mine']);
+      expect(body.items[0]?.workspaceId).toBe(mine.workspaceId);
+      expect(body.total).toBe(1);
+    } finally {
+      await test.close();
+    }
+  });
+
+  it('answers 404 for the library of a workspace the caller is not in', async () => {
+    const test = await createTestApp(db());
+
+    try {
+      const mine = await createTestUser(test.app, db());
+      const other = await createTestUser(test.app, db());
+
+      const response = await test.app.inject({
+        method: 'GET',
+        url: `/scripts?workspaceId=${other.workspaceId}`,
+        headers: bearer(mine.token),
+      });
+
+      expect(response.statusCode).toBe(404);
+    } finally {
+      await test.close();
+    }
+  });
+
+  it('lets a member read and nothing more', async () => {
+    const test = await createTestApp(db());
+
+    try {
+      const editor = await createTestUser(test.app, db());
+      const member = await createTestUser(test.app, db());
+      await addMember(db(), editor.workspaceId, member.id);
+      const seeded = await seedParsedScript(db(), { workspaceId: editor.workspaceId });
+
+      const reads = [
+        `/scripts?workspaceId=${editor.workspaceId}`,
+        `/scripts/${seeded.scriptId}`,
+        `/scripts/${seeded.scriptId}/characters`,
+      ];
+      for (const url of reads) {
+        const response = await test.app.inject({
+          method: 'GET',
+          url,
+          headers: bearer(member.token),
+        });
+        expect(response.statusCode, url).toBe(200);
+      }
+
+      const writes = [
+        { method: 'POST', url: `/scripts/${seeded.scriptId}/reparse` },
+        { method: 'GET', url: `/scripts/${seeded.scriptId}/reparse-preview` },
+        { method: 'GET', url: `/scripts/${seeded.scriptId}/delete-preview` },
+        { method: 'DELETE', url: `/scripts/${seeded.scriptId}` },
+        {
+          method: 'PATCH',
+          url: `/scripts/${seeded.scriptId}/characters/${seeded.characterId}`,
+          payload: { gender: 'female' },
+        },
+      ] as const;
+      for (const write of writes) {
+        const response = await test.app.inject({ ...write, headers: bearer(member.token) });
+        expect(response.statusCode, `${write.method} ${write.url}`).toBe(403);
+      }
+
+      const [row] = await db().select().from(scripts).where(eq(scripts.id, seeded.scriptId));
+      expect(row?.stage).toBe('in_review');
+    } finally {
+      await test.close();
+    }
+  });
+
+  it("refuses a member's upload and keeps no file", async () => {
+    const test = await createTestApp(db());
+
+    try {
+      const editor = await createTestUser(test.app, db());
+      const member = await createTestUser(test.app, db());
+      await addMember(db(), editor.workspaceId, member.id);
+      const multipart = multipartFile(
+        'avarul-excerpt.pdf',
+        'application/pdf',
+        await readFile(SAMPLE_PDF),
+      );
+      const filesBefore = await readdir(env.UPLOAD_DIR).catch(() => []);
+
+      const response = await test.app.inject({
+        method: 'POST',
+        url: `/scripts/upload?workspaceId=${editor.workspaceId}`,
+        headers: { ...multipart.headers, ...bearer(member.token) },
+        payload: multipart.payload,
+      });
+
+      expect(response.statusCode).toBe(403);
+      expect(test.extraction.jobs).toHaveLength(0);
+      expect(await db().$count(scripts)).toBe(0);
+      await expect(readdir(env.UPLOAD_DIR)).resolves.toEqual(filesBefore);
     } finally {
       await test.close();
     }
@@ -93,7 +192,7 @@ describe.skipIf(database === null)('scripts routes', () => {
 
     try {
       const user = await createTestUser(test.app, db());
-      const seeded = await seedParsedScript(db(), { userId: user.id });
+      const seeded = await seedParsedScript(db(), { workspaceId: user.workspaceId });
 
       const response = await test.app.inject({
         method: 'GET',
@@ -111,13 +210,13 @@ describe.skipIf(database === null)('scripts routes', () => {
     }
   });
 
-  it('answers 404 for another account script', async () => {
+  it('answers 404 for a script outside the caller workspaces', async () => {
     const test = await createTestApp(db());
 
     try {
       const owner = await createTestUser(test.app, db(), { email: 'owner@example.com' });
       const intruder = await createTestUser(test.app, db(), { email: 'intruder@example.com' });
-      const seeded = await seedParsedScript(db(), { userId: owner.id });
+      const seeded = await seedParsedScript(db(), { workspaceId: owner.workspaceId });
 
       const response = await test.app.inject({
         method: 'GET',
@@ -137,7 +236,7 @@ describe.skipIf(database === null)('scripts routes', () => {
 
     try {
       const user = await createTestUser(test.app, db());
-      const seeded = await seedParsedScript(db(), { userId: user.id });
+      const seeded = await seedParsedScript(db(), { workspaceId: user.workspaceId });
 
       const deleted = await test.app.inject({
         method: 'DELETE',
@@ -165,7 +264,7 @@ describe.skipIf(database === null)('scripts routes', () => {
 
     try {
       const user = await createTestUser(test.app, db());
-      const seeded = await seedParsedScript(db(), { userId: user.id });
+      const seeded = await seedParsedScript(db(), { workspaceId: user.workspaceId });
 
       for (const preview of ['delete-preview', 'reparse-preview']) {
         const response = await test.app.inject({
@@ -192,7 +291,7 @@ describe.skipIf(database === null)('scripts routes', () => {
 
     try {
       const user = await createTestUser(test.app, db());
-      const seeded = await seedParsedScript(db(), { userId: user.id });
+      const seeded = await seedParsedScript(db(), { workspaceId: user.workspaceId });
 
       const response = await test.app.inject({
         method: 'GET',
@@ -238,7 +337,7 @@ describe.skipIf(database === null)('scripts routes', () => {
 
       const response = await test.app.inject({
         method: 'POST',
-        url: '/scripts/upload',
+        url: `/scripts/upload?workspaceId=${user.workspaceId}`,
         headers: { ...multipart.headers, ...bearer(user.token) },
         payload: multipart.payload,
       });
@@ -263,7 +362,7 @@ describe.skipIf(database === null)('scripts routes', () => {
 
       const response = await test.app.inject({
         method: 'POST',
-        url: '/scripts/upload',
+        url: `/scripts/upload?workspaceId=${user.workspaceId}`,
         headers: { ...multipart.headers, ...bearer(user.token) },
         payload: multipart.payload,
       });
@@ -274,6 +373,7 @@ describe.skipIf(database === null)('scripts routes', () => {
       expect(body.script.stage).toBe('extracting');
       expect(body.script.title).toBe('avarul excerpt');
       expect(body.script.sourceFileName).toBe('avarul-excerpt.pdf');
+      expect(body.script.workspaceId).toBe(user.workspaceId);
 
       const [row] = await db().select().from(scripts).where(eq(scripts.id, body.script.id));
       expect(test.extraction.jobs).toEqual([
@@ -302,7 +402,7 @@ describe.skipIf(database === null)('scripts routes', () => {
 
       const uploaded = await test.app.inject({
         method: 'POST',
-        url: '/scripts/upload',
+        url: `/scripts/upload?workspaceId=${user.workspaceId}`,
         headers: { ...multipart.headers, ...bearer(user.token) },
         payload: multipart.payload,
       });
@@ -334,7 +434,10 @@ describe.skipIf(database === null)('scripts routes', () => {
 
     try {
       const user = await createTestUser(test.app, db());
-      const seeded = await seedParsedScript(db(), { userId: user.id, sourceFilePath: null });
+      const seeded = await seedParsedScript(db(), {
+        workspaceId: user.workspaceId,
+        sourceFilePath: null,
+      });
 
       const response = await test.app.inject({
         method: 'POST',
