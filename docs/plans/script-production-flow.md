@@ -1,6 +1,6 @@
 # Plan: fluxul de producție al unui script (`ScriptProductionFlow`)
 
-Stare: **aprobat, neînceput**. Se pornește cu **Etapa 0**.
+Stare: **Etapele 0 și 1 făcute** (2026-11-03). Urmează **Etapa 2**.
 Decis cu Andrei pe 2026-11-03. Orice abatere de la deciziile de mai jos se discută înainte de implementare.
 
 ## De ce
@@ -56,7 +56,7 @@ Vocile feminine românești sunt motivul pentru Azure. Nu există voci offline g
 
 **Recuperare:**
 
-- **Joburi pierdute:** un job periodic (repetitiv BullMQ) citește din baza de date scripturile blocate într-o etapă „în lucru” și le repune în coadă, cu ID de job idempotent `scriptId:runId`. Fără coadă cu delay, fiindcă stă tot în Redis.
+- **Joburi pierdute:** un job periodic (repetitiv BullMQ) citește din baza de date scripturile blocate într-o etapă „în lucru” și le repune în coadă, cu ID de job idempotent `scriptId_runId` (BullMQ nu acceptă `:`). Fără coadă cu delay, fiindcă stă tot în Redis.
 
 ### Presupuneri (Andrei le poate respinge)
 
@@ -200,6 +200,19 @@ Fiecare etapă se încheie cu aplicația funcțională, testele verzi și typech
 - schimbări de etapă condiționate, verificarea `runId` și jobul periodic de recuperare;
 - ruta de upload și jobul de parsare devin subțiri, iar frontend-ul citește `stage`;
 - teste pe flux cu porturi false: tranziții, evenimente vechi, concurență, recuperare.
+
+**Făcut 2026-11-03.** Abateri și detalii de implementare:
+
+- **`status` e înlocuit complet acum, nu în Etapa 5.** Migrarea `0003` adaugă coloanele și mapează statusurile, iar `0004` șterge coloana `status` și enum-ul `script_status`. Clientul primește `stage` și `stageEnteredAt`. `runId` nu iese din server.
+- **ID-ul jobului e `scriptId_runId`**, nu `scriptId:runId`, fiindcă BullMQ 6 respinge `:` în ID-urile custom.
+- **Reacțiile întorc `StageChanged | StaleReaction`.** O reacție pentru o rulare veche (reparse, ștergere, livrare dublă) primește `{ kind: 'stale' }` și nu scrie nimic.
+- **Fluxul scrie direct în Postgres** prin Drizzle, fără un port de repository: garanțiile lui sunt proprietăți ale SQL-ului. Porturile din Etapa 1 sunt `ExtractionQueue`, `SourceFileStore` și `Clock`. Testele fluxului rulează pe Postgres real, cu acestea false.
+- **Rute noi:** `GET /scripts/:id/reparse-preview` și `GET /scripts/:id/delete-preview` întorc `LossSummary`. Frontend-ul le arată în dialogul de confirmare. `editedLineCount` și `synthesizedCharacterCount` sunt deocamdată 0 (TODO pentru Etapele 3 și 4).
+- **Jobul de recuperare** e un job scheduler BullMQ (`script-recovery`), pornit de worker. Intervalul e `SCRIPT_RECOVERY_INTERVAL_MS` (implicit 5 min), iar perioada de grație e `SCRIPT_RECOVERY_GRACE_MS` (implicit 60 s). Coada e idempotentă per rulare, deci un job care încă așteaptă nu se dublează. Un job eșuat definitiv fără să fi anunțat fluxul (de exemplu după un stall) trece scriptul în `failed`.
+- **Upload cu Redis căzut:** scriptul rămâne în `extracting`, iar recuperarea îl pune în coadă. Așa dispare vechiul TODO cu outbox.
+- **Joburile vechi din coadă** (fără `runId`) sunt respinse ca `UnrecoverableError`. Scripturile lor, migrate în `extracting`, sunt repuse în coadă de recuperare.
+
+**Întrebare deschisă (Andrei):** condiția `WHERE stage = … AND run_id = …` folosește starea citită de comandă pe server. Protejează două cereri simultane, dar nu și un dispozitiv cu ecran vechi: un reparse confirmat pe baza unui rezumat vechi trece dacă scriptul s-a schimbat între timp. Varianta strictă: clientul trimite etapa văzută (`expectedStage`) și primește 409 dacă nu se mai potrivește.
 
 ### Etapa 2: workspace-uri, roluri, invitații
 
